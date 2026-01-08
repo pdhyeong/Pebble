@@ -38,6 +38,21 @@ dependencies:
     path: rust_builder
   flutter_rust_bridge: 2.11.1
 
+  # pebble_app UI dependencies
+  lucide_icons_flutter: ^1.2.1
+  google_fonts: ^6.2.1
+  file_picker: ^8.1.6
+  provider: ^6.1.2
+
+  # P2P and Device Connection
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^5.2.3
+
+  # File and Storage Management
+  desktop_drop: ^0.4.4
+  path_provider: ^2.1.4
+  shared_preferences: ^2.3.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

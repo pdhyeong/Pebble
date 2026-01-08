@@ -11,8 +11,8 @@ pub fn greet(name: String) -> String {
 pub fn init_app() {
     flutter_rust_bridge::setup_default_user_utils();
 
-    // 로깅 초기화
-    env_logger::init();
+    // 로깅 초기화 (이미 초기화된 경우 무시)
+    let _ = env_logger::try_init();
 
     if let Err(e) = db::init_db() {
         log::error!("Failed to initialize database: {}", e);
