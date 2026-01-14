@@ -1,6 +1,16 @@
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tauri::{Manager, State};
+use tokio::sync::{mpsc, Mutex};
+
 pub mod network;
+
+struct P2pState {
+    is_running: AtomicBool,
+    dial_sender: Mutex<Option<mpsc::UnboundedSender<String>>>,
+}
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -9,7 +19,6 @@ fn greet(name: &str) -> String {
 
 #[tauri::command]
 fn get_file_list(folder_path: &str) -> Result<Vec<String>, String> {
-
     let path = Path::new(folder_path);
     if !path.is_dir() {
         return Err(format!("The path '{}' is not a valid directory.", folder_path));
@@ -27,13 +36,70 @@ fn get_file_list(folder_path: &str) -> Result<Vec<String>, String> {
     }
 }
 
+#[tauri::command]
+async fn start_p2p(app_handle: tauri::AppHandle, state: State<'_, Arc<P2pState>>) -> Result<String, String> {
+    if state.is_running.load(Ordering::SeqCst) {
+        return Err("P2P 엔진이 이미 실행 중입니다.".to_string());
+    }
+
+    state.is_running.store(true, Ordering::SeqCst);
+
+    // dial 요청을 받을 채널 생성
+    let (dial_tx, dial_rx) = mpsc::unbounded_channel::<String>();
+
+    // sender를 state에 저장
+    {
+        let mut sender = state.dial_sender.lock().await;
+        *sender = Some(dial_tx);
+    }
+
+    let state_clone = state.inner().clone();
+
+    tauri::async_runtime::spawn(async move {
+        match network::run_p2p_engine(app_handle, dial_rx).await {
+            Ok(_) => println!("P2P 엔진 종료"),
+            Err(e) => println!("P2P 엔진 에러: {}", e),
+        }
+        state_clone.is_running.store(false, Ordering::SeqCst);
+        // 엔진 종료 시 sender 제거
+        let mut sender = state_clone.dial_sender.lock().await;
+        *sender = None;
+    });
+
+    Ok("P2P 엔진이 시작되었습니다.".to_string())
+}
+
+#[tauri::command]
+async fn connect_to_peer(addr: String, state: State<'_, Arc<P2pState>>) -> Result<String, String> {
+    if !state.is_running.load(Ordering::SeqCst) {
+        return Err("P2P 엔진이 실행 중이 아닙니다. 먼저 시작해주세요.".to_string());
+    }
+
+    let sender = state.dial_sender.lock().await;
+    if let Some(tx) = sender.as_ref() {
+        tx.send(addr.clone()).map_err(|e| format!("연결 요청 전송 실패: {}", e))?;
+        Ok(format!("연결 요청 전송: {}", addr))
+    } else {
+        Err("P2P 엔진 채널이 없습니다.".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_p2p_status(state: State<'_, Arc<P2pState>>) -> bool {
+    state.is_running.load(Ordering::SeqCst)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(Arc::new(P2pState {
+            is_running: AtomicBool::new(false),
+            dial_sender: Mutex::new(None),
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![greet, get_file_list])
+        .invoke_handler(tauri::generate_handler![greet, get_file_list, start_p2p, get_p2p_status, connect_to_peer])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

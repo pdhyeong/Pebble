@@ -26,11 +26,14 @@ dist-ssr
 .env
 
 node_modules/
-.DS_Store
 dist/
-
+.DS_Store
+.env
+.vscode/
 
 src-tauri/target/
+src-tauri/gen/
 src-tauri/Cargo.lock
 
-src-tauri/gen/
+Thumbs.db
+*.log

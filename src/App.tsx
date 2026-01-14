@@ -3,7 +3,7 @@ import { Header } from "./components/Header";
 import { HomeView } from "./components/HomeView";
 import { FilesView } from "./components/FilesView";
 import { ActivityView } from "./components/ActivityView";
-import { DevicesView } from "./components/DevicesView";
+import { DevicesView } from "./components/DevicesView/index";
 import { BottomNav } from "./components/BottomNav";
 
 function App() {
