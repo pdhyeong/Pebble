@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion } from "motion/react";
 import { Monitor, Plus, Radio } from "lucide-react";
-import { useP2p } from "../../hooks/useP2p";
+import { useP2pContext } from "../../contexts/P2pContext";
 import { DeviceCard, type Device } from "./DeviceCard";
 import { P2PTestPanel } from "./P2PTestPanel";
 import { PairDeviceModal } from "./PairDeviceModal";
@@ -45,11 +45,12 @@ export function DevicesView() {
     isP2pRunning,
     isStarting,
     discoveredPeers,
+    connectedPeers,
     connectionLogs,
     startP2p,
     connectToPeer,
     clearAll,
-  } = useP2p();
+  } = useP2pContext();
 
   const devices = mockDevices;
   const onlineCount = devices.filter((d) => d.status === "online").length;
@@ -94,6 +95,7 @@ export function DevicesView() {
           isP2pRunning={isP2pRunning}
           isStarting={isStarting}
           discoveredPeers={discoveredPeers}
+          connectedPeers={connectedPeers}
           connectionLogs={connectionLogs}
           onStart={startP2p}
           onConnect={connectToPeer}

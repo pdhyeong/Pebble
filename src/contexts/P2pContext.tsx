@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -6,6 +6,11 @@ export interface DiscoveredPeer {
   peerId: string;
   address: string;
   discoveredAt: Date;
+}
+
+export interface ConnectedPeer {
+  peerId: string;
+  connectedAt: Date;
 }
 
 export interface RemoteFileInfo {
@@ -22,12 +27,23 @@ export interface RemoteFilesData {
   error: string | null;
 }
 
-export interface ConnectedPeer {
-  peerId: string;
-  connectedAt: Date;
+interface P2pContextValue {
+  isP2pRunning: boolean;
+  isStarting: boolean;
+  discoveredPeers: DiscoveredPeer[];
+  connectedPeers: ConnectedPeer[];
+  connectionLogs: string[];
+  remoteFiles: RemoteFilesData | null;
+  isLoadingFiles: boolean;
+  startP2p: () => Promise<void>;
+  connectToPeer: (addr: string) => Promise<void>;
+  requestFileList: (peerId: string, path?: string) => Promise<void>;
+  clearAll: () => void;
 }
 
-export function useP2p() {
+const P2pContext = createContext<P2pContextValue | null>(null);
+
+export function P2pProvider({ children }: { children: ReactNode }) {
   const [isP2pRunning, setIsP2pRunning] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [discoveredPeers, setDiscoveredPeers] = useState<DiscoveredPeer[]>([]);
@@ -36,7 +52,6 @@ export function useP2p() {
   const [remoteFiles, setRemoteFiles] = useState<RemoteFilesData | null>(null);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
 
-  // 로그 추가 헬퍼
   const addLog = useCallback((message: string) => {
     const log = `[${new Date().toLocaleTimeString()}] ${message}`;
     setConnectionLogs(prev => [log, ...prev].slice(0, 50));
@@ -149,14 +164,12 @@ export function useP2p() {
       })
     );
 
-    // 파일 목록 요청 전송됨
     unlisteners.push(
       listen<string>("file-list-request-sent", (event) => {
         addLog(`📤 파일 목록 요청 전송: ${event.payload}`);
       })
     );
 
-    // 파일 목록 요청 실패
     unlisteners.push(
       listen<string>("file-list-error", (event) => {
         addLog(`❌ 파일 목록 요청 실패: ${event.payload}`);
@@ -169,7 +182,6 @@ export function useP2p() {
     };
   }, [addLog]);
 
-  // P2P 시작
   const startP2p = useCallback(async () => {
     setIsStarting(true);
     addLog("🚀 P2P 엔진 시작 중...");
@@ -186,7 +198,6 @@ export function useP2p() {
     }
   }, [addLog]);
 
-  // 피어 연결
   const connectToPeer = useCallback(async (peerAddr: string) => {
     addLog(`📞 연결 시도: ${peerAddr}`);
 
@@ -198,7 +209,6 @@ export function useP2p() {
     }
   }, [addLog]);
 
-  // 원격 파일 목록 요청
   const requestFileList = useCallback(async (peerId: string, path: string = "/") => {
     addLog(`📂 파일 목록 요청: ${peerId.slice(0, 12)}... (${path})`);
     setIsLoadingFiles(true);
@@ -212,25 +222,35 @@ export function useP2p() {
     }
   }, [addLog]);
 
-  // 목록 초기화
   const clearAll = useCallback(() => {
     setDiscoveredPeers([]);
     setConnectionLogs([]);
     setRemoteFiles(null);
-    // connectedPeers는 유지 (실제 연결 상태이므로)
   }, []);
 
-  return {
-    isP2pRunning,
-    isStarting,
-    discoveredPeers,
-    connectedPeers,
-    connectionLogs,
-    remoteFiles,
-    isLoadingFiles,
-    startP2p,
-    connectToPeer,
-    requestFileList,
-    clearAll,
-  };
+  return (
+    <P2pContext.Provider value={{
+      isP2pRunning,
+      isStarting,
+      discoveredPeers,
+      connectedPeers,
+      connectionLogs,
+      remoteFiles,
+      isLoadingFiles,
+      startP2p,
+      connectToPeer,
+      requestFileList,
+      clearAll,
+    }}>
+      {children}
+    </P2pContext.Provider>
+  );
+}
+
+export function useP2pContext() {
+  const context = useContext(P2pContext);
+  if (!context) {
+    throw new Error("useP2pContext must be used within a P2pProvider");
+  }
+  return context;
 }

@@ -1,10 +1,11 @@
 import { Power, RefreshCw, Trash2, Wifi } from "lucide-react";
-import type { DiscoveredPeer } from "../../hooks/useP2p";
+import type { DiscoveredPeer, ConnectedPeer } from "../../contexts/P2pContext";
 
 interface P2PTestPanelProps {
   isP2pRunning: boolean;
   isStarting: boolean;
   discoveredPeers: DiscoveredPeer[];
+  connectedPeers: ConnectedPeer[];
   connectionLogs: string[];
   onStart: () => void;
   onConnect: (addr: string) => void;
@@ -15,11 +16,17 @@ export function P2PTestPanel({
   isP2pRunning,
   isStarting,
   discoveredPeers,
+  connectedPeers,
   connectionLogs,
   onStart,
   onConnect,
   onClear,
 }: P2PTestPanelProps) {
+  // 피어가 연결되어 있는지 확인
+  const isPeerConnected = (peerId: string) => {
+    return connectedPeers.some(p => p.peerId === peerId);
+  };
+
   return (
     <div className="px-4 py-4 border-b border-border/50 bg-orange-500/5">
       {/* P2P 시작/상태 영역 */}
@@ -40,7 +47,7 @@ export function P2PTestPanel({
             </p>
             <p className="text-xs text-muted-foreground">
               {isP2pRunning
-                ? "mDNS로 피어 검색 중..."
+                ? `${connectedPeers.length}개 기기 연결됨`
                 : "시작 버튼을 눌러 검색을 시작하세요"}
             </p>
           </div>
@@ -111,30 +118,47 @@ export function P2PTestPanel({
           </div>
         ) : (
           <div className="space-y-2 max-h-48 overflow-y-auto">
-            {discoveredPeers.map((peer) => (
-              <div
-                key={peer.peerId}
-                className="flex items-center justify-between p-3 rounded-xl bg-card border border-border"
-              >
-                <div className="flex-1 min-w-0 mr-3">
-                  <p className="text-xs font-mono truncate text-primary">
-                    {peer.peerId}
-                  </p>
-                  <p className="text-xs text-muted-foreground truncate">
-                    {peer.address}
-                  </p>
-                  <p className="text-xs text-muted-foreground/60">
-                    발견: {peer.discoveredAt.toLocaleTimeString()}
-                  </p>
-                </div>
-                <button
-                  onClick={() => onConnect(peer.address)}
-                  className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-medium hover:bg-primary/90 transition-colors flex-shrink-0"
+            {discoveredPeers.map((peer) => {
+              const isConnected = isPeerConnected(peer.peerId);
+              return (
+                <div
+                  key={peer.peerId}
+                  className={`flex items-center justify-between p-3 rounded-xl bg-card border ${
+                    isConnected ? "border-green-500/50 bg-green-500/5" : "border-border"
+                  }`}
                 >
-                  연결
-                </button>
-              </div>
-            ))}
+                  <div className="flex-1 min-w-0 mr-3">
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs font-mono truncate text-primary">
+                        {peer.peerId}
+                      </p>
+                      {isConnected && (
+                        <span className="px-2 py-0.5 rounded-full bg-green-500/20 text-green-600 text-xs font-medium">
+                          연결됨
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {peer.address}
+                    </p>
+                    <p className="text-xs text-muted-foreground/60">
+                      발견: {peer.discoveredAt.toLocaleTimeString()}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => onConnect(peer.address)}
+                    disabled={isConnected}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex-shrink-0 ${
+                      isConnected
+                        ? "bg-green-500/20 text-green-600 cursor-not-allowed"
+                        : "bg-primary text-white hover:bg-primary/90"
+                    }`}
+                  >
+                    {isConnected ? "연결됨" : "연결"}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -154,9 +178,9 @@ export function P2PTestPanel({
                 className={`${
                   log.includes("실패")
                     ? "text-red-400"
-                    : log.includes("성공")
+                    : log.includes("성공") || log.includes("수신")
                       ? "text-green-400"
-                      : log.includes("발견")
+                      : log.includes("발견") || log.includes("요청")
                         ? "text-blue-400"
                         : "text-gray-300"
                 }`}
