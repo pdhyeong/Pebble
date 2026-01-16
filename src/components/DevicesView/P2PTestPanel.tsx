@@ -1,13 +1,15 @@
-import { Power, RefreshCw, Trash2, Wifi } from "lucide-react";
+import { Power, RefreshCw, Trash2, Square } from "lucide-react";
 import type { DiscoveredPeer, ConnectedPeer } from "../../contexts/P2pContext";
 
 interface P2PTestPanelProps {
   isP2pRunning: boolean;
   isStarting: boolean;
+  isStopping: boolean;
   discoveredPeers: DiscoveredPeer[];
   connectedPeers: ConnectedPeer[];
   connectionLogs: string[];
   onStart: () => void;
+  onStop: () => void;
   onConnect: (addr: string) => void;
   onClear: () => void;
 }
@@ -15,10 +17,12 @@ interface P2PTestPanelProps {
 export function P2PTestPanel({
   isP2pRunning,
   isStarting,
+  isStopping,
   discoveredPeers,
   connectedPeers,
   connectionLogs,
   onStart,
+  onStop,
   onConnect,
   onClear,
 }: P2PTestPanelProps) {
@@ -52,34 +56,51 @@ export function P2PTestPanel({
             </p>
           </div>
         </div>
-        <button
-          onClick={onStart}
-          disabled={isP2pRunning || isStarting}
-          className={`px-4 py-2 rounded-xl font-medium text-sm transition-all flex items-center gap-2 ${
-            isP2pRunning
-              ? "bg-green-500/20 text-green-600 cursor-not-allowed"
-              : isStarting
+        {isP2pRunning ? (
+          <button
+            onClick={onStop}
+            disabled={isStopping}
+            className={`px-4 py-2 rounded-xl font-medium text-sm transition-all flex items-center gap-2 ${
+              isStopping
+                ? "bg-orange-500/20 text-orange-600"
+                : "bg-red-500 text-white hover:bg-red-600"
+            }`}
+          >
+            {isStopping ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                중지 중...
+              </>
+            ) : (
+              <>
+                <Square className="w-4 h-4" />
+                P2P 중지
+              </>
+            )}
+          </button>
+        ) : (
+          <button
+            onClick={onStart}
+            disabled={isStarting}
+            className={`px-4 py-2 rounded-xl font-medium text-sm transition-all flex items-center gap-2 ${
+              isStarting
                 ? "bg-orange-500/20 text-orange-600"
                 : "bg-green-500 text-white hover:bg-green-600"
-          }`}
-        >
-          {isStarting ? (
-            <>
-              <RefreshCw className="w-4 h-4 animate-spin" />
-              시작 중...
-            </>
-          ) : isP2pRunning ? (
-            <>
-              <Wifi className="w-4 h-4" />
-              실행 중
-            </>
-          ) : (
-            <>
-              <Power className="w-4 h-4" />
-              P2P 시작
-            </>
-          )}
-        </button>
+            }`}
+          >
+            {isStarting ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                시작 중...
+              </>
+            ) : (
+              <>
+                <Power className="w-4 h-4" />
+                P2P 시작
+              </>
+            )}
+          </button>
+        )}
       </div>
 
       {/* 상태 표시 및 초기화 */}

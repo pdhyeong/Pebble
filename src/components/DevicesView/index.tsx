@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { motion } from "motion/react";
+import { useState, useEffect } from "react";
 import { Monitor, Plus, Radio } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { useP2pContext } from "../../contexts/P2pContext";
 import { DeviceCard, type Device } from "./DeviceCard";
 import { P2PTestPanel } from "./P2PTestPanel";
@@ -40,17 +40,34 @@ const mockDevices: Device[] = [
 export function DevicesView() {
   const [showPairModal, setShowPairModal] = useState(false);
   const [showTestPanel, setShowTestPanel] = useState(false);
+  const [localIp, setLocalIp] = useState<string>("로딩 중...");
 
   const {
     isP2pRunning,
     isStarting,
+    isStopping,
     discoveredPeers,
     connectedPeers,
     connectionLogs,
     startP2p,
+    stopP2p,
     connectToPeer,
     clearAll,
   } = useP2pContext();
+
+  // 로컬 IP 주소 가져오기
+  useEffect(() => {
+    async function fetchLocalIp() {
+      try {
+        const ip = await invoke<string>("get_local_ip");
+        setLocalIp(ip);
+      } catch (e) {
+        console.error("IP 조회 실패:", e);
+        setLocalIp("알 수 없음");
+      }
+    }
+    fetchLocalIp();
+  }, []);
 
   const devices = mockDevices;
   const onlineCount = devices.filter((d) => d.status === "online").length;
@@ -94,10 +111,12 @@ export function DevicesView() {
         <P2PTestPanel
           isP2pRunning={isP2pRunning}
           isStarting={isStarting}
+          isStopping={isStopping}
           discoveredPeers={discoveredPeers}
           connectedPeers={connectedPeers}
           connectionLogs={connectionLogs}
           onStart={startP2p}
+          onStop={stopP2p}
           onConnect={connectToPeer}
           onClear={clearAll}
         />
@@ -105,6 +124,25 @@ export function DevicesView() {
 
       {/* Devices List */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
+        {/* 내 IP 주소 카드 */}
+        <div className="mb-4 p-4 rounded-2xl bg-gradient-to-br from-primary/5 to-chart-2/5 border border-border/50">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-chart-2 flex items-center justify-center">
+                <Radio className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">내 IP 주소</p>
+                <p className="font-mono font-medium">{localIp}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+              <span className="text-xs text-muted-foreground">연결됨</span>
+            </div>
+          </div>
+        </div>
+
         <div className="space-y-3">
           {devices.map((device) => (
             <DeviceCard key={device.id} device={device} />
@@ -130,25 +168,6 @@ export function DevicesView() {
             </button>
           </div>
         )}
-      </div>
-
-      {/* Network Info Footer */}
-      <div className="sticky bottom-0 bg-gradient-to-br from-primary/5 to-chart-2/5 border-t border-border/50 px-4 py-3">
-        <div className="flex items-center justify-between text-sm mb-2">
-          <span className="text-muted-foreground">네트워크</span>
-          <span className="font-medium font-mono">192.168.0.1</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 h-2 bg-muted/50 rounded-full overflow-hidden">
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: "85%" }}
-              transition={{ duration: 1, ease: "easeOut" }}
-              className="h-full bg-gradient-to-r from-green-400 to-emerald-400 rounded-full"
-            />
-          </div>
-          <span className="text-xs text-muted-foreground">신호 강도</span>
-        </div>
       </div>
 
       {/* Pair Device Modal */}

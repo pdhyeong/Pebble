@@ -1,14 +1,13 @@
-import { Home, FolderOpen, Activity, Smartphone } from "lucide-react";
+import { Home, Activity, Smartphone } from "lucide-react";
 
 interface BottomNavProps {
-  currentTab: "home" | "files" | "activity" | "devices";
-  onTabChange: (tab: "home" | "files" | "activity" | "devices") => void;
+  currentTab: "home" | "activity" | "devices";
+  onTabChange: (tab: "home" | "activity" | "devices") => void;
 }
 
 export function BottomNav({ currentTab, onTabChange }: BottomNavProps) {
   const tabs = [
     { id: "home" as const, label: "홈", icon: Home },
-    { id: "files" as const, label: "파일", icon: FolderOpen },
     { id: "activity" as const, label: "활동", icon: Activity },
     { id: "devices" as const, label: "기기", icon: Smartphone },
   ];

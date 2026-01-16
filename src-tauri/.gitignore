@@ -45,3 +45,5 @@ src-tauri/Cargo.lock
 
 Thumbs.db
 *.log
+
+PROGRESS.md

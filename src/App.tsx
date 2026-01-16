@@ -1,14 +1,13 @@
 import { useState } from "react";
 import { Header } from "./components/Header";
-import { HomeView } from "./components/HomeView";
-import { FilesView } from "./components/FilesView";
+import { HomeView } from "./components/HomeView/index";
 import { ActivityView } from "./components/ActivityView";
 import { DevicesView } from "./components/DevicesView/index";
 import { BottomNav } from "./components/BottomNav";
 import { P2pProvider } from "./contexts/P2pContext";
 
 function App() {
-  const [currentTab, setCurrentTab] = useState<"home" | "files" | "activity" | "devices">("home");
+  const [currentTab, setCurrentTab] = useState<"home" | "activity" | "devices">("home");
 
   return (
     <P2pProvider>
@@ -17,7 +16,6 @@ function App() {
 
         <main className="pb-20">
           {currentTab === "home" && <HomeView />}
-          {currentTab === "files" && <FilesView />}
           {currentTab === "activity" && <ActivityView />}
           {currentTab === "devices" && <DevicesView />}
         </main>
