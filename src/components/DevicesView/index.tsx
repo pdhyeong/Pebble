@@ -86,14 +86,13 @@ export function DevicesView() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowTestPanel(!showTestPanel)}
-              className={`px-3 py-2 rounded-xl font-medium transition-all flex items-center gap-2 text-sm ${
-                showTestPanel
-                  ? "bg-orange-500 text-white"
-                  : "bg-orange-500/10 text-orange-600 border border-orange-500/20"
-              }`}
+              className={`px-3 py-2 rounded-xl font-medium transition-all flex items-center gap-2 text-sm ${showTestPanel
+                ? "bg-orange-500 text-white"
+                : "bg-orange-500/10 text-orange-600 border border-orange-500/20"
+                }`}
             >
               <Radio className="w-4 h-4" />
-              P2P 테스트
+              P2P 연결
             </button>
             <button
               onClick={() => setShowPairModal(true)}

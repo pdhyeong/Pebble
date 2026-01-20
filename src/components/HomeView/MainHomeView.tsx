@@ -97,36 +97,40 @@ export function MainHomeView({ onOpenLocalFiles, onSelectPeer }: MainHomeViewPro
           ) : (
             <div className="space-y-3">
               {connectedPeers.map((peer) => (
-                <button
+                <div
                   key={peer.peerId}
                   onClick={() => onSelectPeer(peer.peerId)}
-                  className="w-full flex items-center gap-4 p-4 rounded-2xl bg-card border border-border hover:shadow-lg hover:border-green-500/50 hover:scale-[1.01] transition-all text-left"
+                  className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 cursor-pointer transition-colors"
                 >
-                  <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-green-400 to-emerald-400 flex items-center justify-center flex-shrink-0 shadow-md">
-                    <Monitor className="w-7 h-7 text-white" />
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-medium mb-1">
-                      {peer.deviceName || "알 수 없는 기기"}
-                    </h4>
-                    <p className="text-xs font-mono text-muted-foreground truncate">
-                      {peer.peerId.slice(0, 20)}...
-                    </p>
-                    <div className="flex items-center gap-2 text-xs text-green-600 mt-1">
-                      <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                      <span>연결됨</span>
-                      <span className="text-muted-foreground">
-                        • {peer.connectedAt.toLocaleTimeString()}
-                      </span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white font-bold">
+                        {peer.deviceName.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="font-medium text-gray-900 dark:text-white">
+                          {peer.sharedFolderName ? `📁 ${peer.sharedFolderName}` : peer.deviceName}
+                        </div>
+                        <div className="text-sm text-gray-500 dark:text-gray-400">
+                          {peer.peerId.slice(0, 16)}...
+                        </div>
+                      </div>
                     </div>
+                    <svg
+                      className="w-5 h-5 text-gray-400"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 5l7 7-7 7"
+                      />
+                    </svg>
                   </div>
-
-                  <div className="flex items-center gap-2 text-primary">
-                    <Folder className="w-5 h-5" />
-                    <span className="text-sm font-medium">폴더 보기</span>
-                  </div>
-                </button>
+                </div>
               ))}
             </div>
           )}
