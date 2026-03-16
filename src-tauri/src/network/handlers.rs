@@ -2,9 +2,9 @@
 // run_p2p_engine의 820줄 God Function에서 분리된 이벤트 핸들러들
 
 use crate::network::behavior::{
-    DeviceInfoRequest, FileListRequest, FileListResponse, FileTransferRequest,
-    FileTransferResponse, FileTransferStreamMsg, FileTransferStreamRequest,
-    FileTransferStreamResponse, PairingRequest, PairingResponse,
+    DeviceInfoRequest, DirectoryChangedRequest, DirectoryChangedResponse, FileListRequest,
+    FileListResponse, FileTransferRequest, FileTransferResponse, FileTransferStreamMsg,
+    FileTransferStreamRequest, FileTransferStreamResponse, PairingRequest, PairingResponse,
 };
 use crate::network::helpers::{get_quic_address, list_files};
 use crate::network::types::{
@@ -108,6 +108,9 @@ impl EngineContext {
             P2pCommand::ApprovePairing(approval) => self.handle_pairing_approval(swarm, approval),
             P2pCommand::CancelTransfer(cancel_req) => {
                 self.handle_cancel_transfer(swarm, cancel_req)
+            }
+            P2pCommand::NotifyDirectoryChanged => {
+                self.handle_notify_directory_changed(swarm)
             }
         }
         false // 계속 실행
@@ -708,13 +711,27 @@ impl EngineContext {
                                 let transfer_state = IncomingTransferState {
                                     file,
                                     file_name: file_name.clone(),
-                                    saved_path: save_path,
+                                    saved_path: save_path.clone(),
                                     total_chunks,
                                     received_chunks: 0,
                                     peer_id: peer,
                                     start_time: std::time::Instant::now(),
                                     total_size,
                                 };
+
+                                self.app
+                                    .emit(
+                                        "file-download-started",
+                                        serde_json::json!({
+                                            "transfer_id": transfer_id,
+                                            "peer_id": peer.to_string(),
+                                            "file_name": file_name,
+                                            "total_size": total_size
+                                        })
+                                        .to_string(),
+                                    )
+                                    .ok();
+
                                 self.incoming_transfers
                                     .insert(transfer_id.clone(), transfer_state);
 
@@ -799,6 +816,7 @@ impl EngineContext {
 
                     if transfer_state.received_chunks >= transfer_state.total_chunks {
                         println!("✅ 파일 수신 완료: {:?}", transfer_state.saved_path);
+                        
                         let res = FileTransferStreamResponse {
                             transfer_id: transfer_id.clone(),
                             success: true,
@@ -808,6 +826,18 @@ impl EngineContext {
                             .behaviour_mut()
                             .file_stream
                             .send_response(channel, res)
+                            .ok();
+
+                        self.app
+                            .emit(
+                                "file-download-complete",
+                                serde_json::json!({
+                                    "transfer_id": transfer_id.clone(),
+                                    "peer_id": peer.to_string(),
+                                    "saved_path": transfer_state.saved_path.clone(),
+                                })
+                                .to_string(),
+                            )
                             .ok();
 
                         self.app
@@ -1124,6 +1154,52 @@ impl EngineContext {
         if !address.to_string().contains("127.0.0.1") {
             println!("listening address: {}", address);
             self.app.emit("listening-on", address.to_string()).ok();
+        }
+    }
+
+    // ─── 디렉토리 변경 알림 전송 (내 폴더가 변경됐을 때) ───
+
+    fn handle_notify_directory_changed(&self, swarm: &mut Swarm<MyBehaviour>) {
+        for peer_id in &self.trusted_peers {
+            swarm
+                .behaviour_mut()
+                .directory_changed
+                .send_request(peer_id, DirectoryChangedRequest {});
+        }
+        if !self.trusted_peers.is_empty() {
+            println!(
+                "[P2P] 디렉토리 변경 알림 전송: {}개 피어",
+                self.trusted_peers.len()
+            );
+        }
+    }
+
+    // ─── 디렉토리 변경 알림 수신 (상대방 폴더가 변경됐을 때) ───
+
+    pub fn handle_directory_changed_event(
+        &self,
+        swarm: &mut Swarm<MyBehaviour>,
+        event: request_response::Event<DirectoryChangedRequest, DirectoryChangedResponse>,
+    ) {
+        if let request_response::Event::Message { peer, message } = event {
+            if let request_response::Message::Request { channel, .. } = message {
+                if self.trusted_peers.contains(&peer) {
+                    swarm
+                        .behaviour_mut()
+                        .directory_changed
+                        .send_response(channel, DirectoryChangedResponse {})
+                        .ok();
+
+                    self.app
+                        .emit(
+                            "remote-directory-changed",
+                            serde_json::json!({ "peer_id": peer.to_string() }).to_string(),
+                        )
+                        .ok();
+
+                    println!("[P2P] {} 에서 디렉토리 변경 알림 수신", peer);
+                }
+            }
         }
     }
 }

@@ -29,7 +29,7 @@ node_modules/
 dist/
 .DS_Store
 .env
-.vscode/
+.vscode
 
 src-tauri/target/
 src-tauri/gen/
@@ -42,5 +42,3 @@ PROGRESS.md
 codebase_analysis.md
 codebase_improvements.md
 Current_PROGRESS.md
-
-.vscode

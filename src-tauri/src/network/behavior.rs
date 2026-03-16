@@ -499,6 +499,92 @@ impl request_response::Codec for PairingCodec {
     }
 }
 
+// ===== 디렉토리 변경 알림 프로토콜 =====
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectoryChangedRequest {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectoryChangedResponse {}
+
+#[derive(Debug, Clone, Default)]
+pub struct DirectoryChangedCodec;
+
+#[async_trait::async_trait]
+impl request_response::Codec for DirectoryChangedCodec {
+    type Protocol = StreamProtocol;
+    type Request = DirectoryChangedRequest;
+    type Response = DirectoryChangedResponse;
+
+    async fn read_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        let mut len_buf = [0u8; 4];
+        io.read_exact(&mut len_buf).await?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+        let mut buf = vec![0u8; len];
+        io.read_exact(&mut buf).await?;
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    async fn read_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        let mut len_buf = [0u8; 4];
+        io.read_exact(&mut len_buf).await?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+        let mut buf = vec![0u8; len];
+        io.read_exact(&mut buf).await?;
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    async fn write_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        req: Self::Request,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        let data =
+            serde_json::to_vec(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let len = (data.len() as u32).to_be_bytes();
+        io.write_all(&len).await?;
+        io.write_all(&data).await?;
+        io.flush().await?;
+        Ok(())
+    }
+
+    async fn write_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        res: Self::Response,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        let data =
+            serde_json::to_vec(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let len = (data.len() as u32).to_be_bytes();
+        io.write_all(&len).await?;
+        io.write_all(&data).await?;
+        io.flush().await?;
+        Ok(())
+    }
+}
+
 #[derive(NetworkBehaviour)]
 pub struct MyBehaviour {
     pub mdns: mdns::tokio::Behaviour,
@@ -509,4 +595,5 @@ pub struct MyBehaviour {
     pub file_stream: request_response::Behaviour<FileTransferStreamCodec>,
     pub device_info: request_response::Behaviour<DeviceInfoCodec>,
     pub pairing: request_response::Behaviour<PairingCodec>,
+    pub directory_changed: request_response::Behaviour<DirectoryChangedCodec>,
 }

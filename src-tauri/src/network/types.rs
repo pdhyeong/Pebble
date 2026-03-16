@@ -90,6 +90,8 @@ pub enum P2pCommand {
     RequestPairing(PairingRequestMsg),
     /// 페어링 승인/거절
     ApprovePairing(PairingApprovalMsg),
+    /// 연결된 모든 피어에게 디렉토리 변경 신호 브로드캐스트
+    NotifyDirectoryChanged,
     /// 진행 중인 전송 취소
     CancelTransfer(CancelTransferMsg),
     /// 엔진 종료

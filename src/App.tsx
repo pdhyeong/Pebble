@@ -16,8 +16,8 @@ import { SharedFolderModal } from "./components/SharedFolderModal";
 function AppContent() {
   const [currentTab, setCurrentTab] = useState<"home" | "activity" | "devices">("home");
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  
-  const { 
+
+  const {
     activeTransfers,
     myDeviceName,
     sharedFolderPath,
@@ -26,7 +26,7 @@ function AppContent() {
     setSharedFolder,
     setSharedFolderDisplayName
   } = useP2pContext();
-  
+
   const { saveSettings } = useSettingsStore();
 
   // 전송 취소 핸들러
@@ -43,13 +43,20 @@ function AppContent() {
     await setSharedFolder(newPath);
     await setMyDeviceName(newDeviceName);
     await setSharedFolderDisplayName(newDisplayName);
-    
+
     // 2. 영구 저장소에 저장 (다음 앱 시작 시 유지되도록)
     await saveSettings({
       deviceName: newDeviceName,
       sharedFolderPath: newPath,
       sharedFolderDisplayName: newDisplayName,
     });
+
+    // 3. 파일 와처를 새 경로로 재시작
+    try {
+      await invoke("refresh_watcher", { newPath });
+    } catch (e) {
+      console.error("파일 와처 재시작 실패:", e);
+    }
   };
 
   // Map을 배열로 변환
@@ -68,7 +75,7 @@ function AppContent() {
       <BottomNav currentTab={currentTab} onTabChange={setCurrentTab} />
 
       <PairingModal />
-      
+
       <SharedFolderModal
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
@@ -114,6 +121,9 @@ function App() {
           await invoke("set_device_name", { name: settings.deviceName });
           await invoke("set_shared_folder", { path: settings.sharedFolderPath });
           await invoke("set_shared_folder_display_name", { name: settings.sharedFolderDisplayName });
+
+          // 저장된 공유 폴더 경로에 대해 파일 와처 시작
+          await invoke("refresh_watcher", { newPath: settings.sharedFolderPath });
         } catch (e) {
           console.error("설정 백엔드 동기화 실패:", e);
         }
@@ -130,6 +140,9 @@ function App() {
       await invoke("set_device_name", { name: settings.deviceName });
       await invoke("set_shared_folder", { path: settings.sharedFolderPath });
       await invoke("set_shared_folder_display_name", { name: settings.sharedFolderDisplayName });
+
+      // 초기 설정 완료 시 파일 와처 시작
+      await invoke("refresh_watcher", { newPath: settings.sharedFolderPath });
     } catch (e) {
       console.error("초기 설정 백엔드 동기화 실패:", e);
     }

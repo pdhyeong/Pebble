@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Folder,
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   Grid3x3,
   List,
 } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { useP2pContext } from "../../contexts/P2pContext";
 import { FileListItem } from "./FileListItem";
 import { FileGridItem } from "./FileGridItem";
@@ -41,6 +42,24 @@ export function LocalFilesView({ onBack }: LocalFilesViewProps) {
     toggleSelection,
     cancelSelection,
   } = useFileSelection();
+
+  // 파일 와처 이벤트 구독: 백엔드에서 변경 감지 시 자동 새로고침
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    const setupListener = async () => {
+      unlisten = await listen("local-files-changed", () => {
+        // 현재 경로의 파일 목록을 새로 가져옴
+        refreshLocalFiles(currentPath);
+      });
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [currentPath, refreshLocalFiles]);
 
   // 폴더 진입 핸들러
   const handleFolderClick = (folderPath: string) => {

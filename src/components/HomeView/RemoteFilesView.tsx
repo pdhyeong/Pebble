@@ -271,6 +271,31 @@ export function RemoteFilesView({ peerId, onBack }: RemoteFilesViewProps) {
     };
   }, []);
 
+  // 상대방 디렉토리 변경 시 자동 갱신
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    const currentPath = remoteFiles?.path || "/";
+
+    const setup = async () => {
+      unlisten = await listen<string>("remote-directory-changed", (event) => {
+        try {
+          const data = JSON.parse(event.payload);
+          if (data.peer_id === peerId) {
+            requestFileList(peerId, currentPath);
+          }
+        } catch (e) {
+          console.error("remote-directory-changed 파싱 실패:", e);
+        }
+      });
+    };
+
+    setup();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [peerId, remoteFiles?.path, requestFileList]);
+
   // 진행률 이벤트 리스너
   useEffect(() => {
     const unlisteners: Promise<() => void>[] = [];

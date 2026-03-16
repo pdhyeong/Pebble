@@ -275,9 +275,25 @@ export function useP2pEventListeners(state: P2pEventState) {
 
         unlisteners.push(
             listen<string>("file-download-error", (event) => {
-                addLog(`❌ 파일 다운로드 실패: ${event.payload}`);
-                setIsDownloading(false);
-                setDownloadProgress(0);
+                try {
+                    const data = JSON.parse(event.payload);
+                    addLog(`❌ 파일 다운로드 실패: ${data.error || "Unknown"}`);
+                    setIsDownloading(false);
+                    setDownloadProgress(0);
+                    
+                    const transferId = data.transfer_id || "";
+                    if (transferId) {
+                        setActiveTransfers((prev) => {
+                            const newMap = new Map(prev);
+                            newMap.delete(transferId);
+                            return newMap;
+                        });
+                    }
+                } catch (e) {
+                    addLog(`❌ 파일 다운로드 실패: ${event.payload}`);
+                    setIsDownloading(false);
+                    setDownloadProgress(0);
+                }
             })
         );
 
@@ -304,10 +320,10 @@ export function useP2pEventListeners(state: P2pEventState) {
                         });
                         return newMap;
                     });
-                } catch {
-                    addLog(`📤 파일 업로드 시작`);
+                } catch (e) {
                     setIsUploading(true);
                     setUploadProgress(0);
+                    console.error("upload started event parse error", e);
                 }
             })
         );
@@ -356,21 +372,35 @@ export function useP2pEventListeners(state: P2pEventState) {
                             return newMap;
                         });
                     }, 1000);
-                } catch {
-                    addLog(`✅ 파일 업로드 완료`);
+                } catch (e) {
                     setIsUploading(false);
                     setUploadProgress(0);
-                    setActiveTransfers(new Map());
+                    console.error("upload complete event parse error", e);
                 }
             })
         );
 
         unlisteners.push(
             listen<string>("file-upload-error", (event) => {
-                addLog(`❌ 파일 업로드 실패: ${event.payload}`);
-                setIsUploading(false);
-                setUploadProgress(0);
-                setActiveTransfers(new Map());
+                try {
+                    const data = JSON.parse(event.payload);
+                    addLog(`❌ 파일 업로드 실패: ${data.error || "Unknown"}`);
+                    setIsUploading(false);
+                    setUploadProgress(0);
+                    
+                    const transferId = data.transfer_id || "";
+                    if (transferId) {
+                        setActiveTransfers((prev) => {
+                            const newMap = new Map(prev);
+                            newMap.delete(transferId);
+                            return newMap;
+                        });
+                    }
+                } catch (e) {
+                    addLog(`❌ 파일 업로드 실패: ${event.payload}`);
+                    setIsUploading(false);
+                    setUploadProgress(0);
+                }
             })
         );
 

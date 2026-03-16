@@ -59,9 +59,8 @@ export function InitialSetup({ onComplete }: InitialSetupProps) {
               파일을 안전하게 공유하기 위한 첫 단계입니다.
             </p>
           </div>
-        </div>
 
-        <div className="space-y-6">
+          <div className="space-y-6">
           {/* 기기 이름 설정 */}
           <div className="space-y-2">
             <label className="text-sm font-medium flex items-center gap-2">
@@ -132,6 +131,7 @@ export function InitialSetup({ onComplete }: InitialSetupProps) {
           <span>Pebble 시작하기</span>
           <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
         </button>
+      </div>
       </div>
     </div>
   );

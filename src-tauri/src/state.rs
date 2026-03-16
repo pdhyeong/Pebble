@@ -1,10 +1,18 @@
 // 상태 관리 모듈
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 use crate::network::P2pCommand;
+
+/// 파일 와처 상태 – 활성화된 debouncer를 유지합니다.
+/// 폴더가 변경될 때 기존 debouncer를 Drop하고 새로 시작하면 됩니다.
+pub struct WatcherState {
+    pub debouncer: Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>,
+}
 
 /// 로컬 파일 정보
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -90,6 +90,14 @@ pub async fn run_p2p_engine(
                 request_response::Config::default(),
             );
 
+            let directory_changed = request_response::Behaviour::new(
+                [(
+                    StreamProtocol::new("/pebble/dir-changed/1.0.0"),
+                    request_response::ProtocolSupport::Full,
+                )],
+                request_response::Config::default(),
+            );
+
             Ok(MyBehaviour {
                 mdns,
                 identify,
@@ -99,6 +107,7 @@ pub async fn run_p2p_engine(
                 file_stream,
                 device_info,
                 pairing,
+                directory_changed,
             })
         })?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60 * 60)))
@@ -189,6 +198,10 @@ pub async fn run_p2p_engine(
 
                     SwarmEvent::Behaviour(behavior::MyBehaviourEvent::Pairing(event)) => {
                         ctx.handle_pairing_event(&mut swarm, event);
+                    }
+
+                    SwarmEvent::Behaviour(behavior::MyBehaviourEvent::DirectoryChanged(event)) => {
+                        ctx.handle_directory_changed_event(&mut swarm, event);
                     }
 
                     SwarmEvent::ConnectionEstablished { peer_id, .. } => {
