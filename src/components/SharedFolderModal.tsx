@@ -1,4 +1,4 @@
-import { X, FolderOpen, Check, User } from "lucide-react";
+import { X, FolderOpen, Check, User, Folder } from "lucide-react";
 import { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -7,7 +7,8 @@ interface SharedFolderModalProps {
   onClose: () => void;
   currentPath: string;
   currentDeviceName: string;
-  onSave: (path: string, deviceName: string) => void;
+  currentDisplayName: string;
+  onSave: (path: string, deviceName: string, displayName: string) => void;
 }
 
 export function SharedFolderModal({
@@ -15,15 +16,18 @@ export function SharedFolderModal({
   onClose,
   currentPath,
   currentDeviceName,
+  currentDisplayName,
   onSave,
 }: SharedFolderModalProps) {
   const [folderPath, setFolderPath] = useState(currentPath);
   const [deviceName, setDeviceName] = useState(currentDeviceName);
+  const [displayName, setDisplayName] = useState(currentDisplayName);
 
   useEffect(() => {
     setFolderPath(currentPath);
     setDeviceName(currentDeviceName);
-  }, [currentPath, currentDeviceName]);
+    setDisplayName(currentDisplayName);
+  }, [currentPath, currentDeviceName, currentDisplayName]);
 
   if (!isOpen) return null;
 
@@ -43,7 +47,7 @@ export function SharedFolderModal({
   };
 
   const handleSave = () => {
-    onSave(folderPath, deviceName);
+    onSave(folderPath, deviceName, displayName);
     onClose();
   };
 
@@ -101,6 +105,24 @@ export function SharedFolderModal({
             </div>
             <p className="text-xs text-muted-foreground">
               이 폴더의 파일들이 연결된 기기에서 보이게 됩니다
+            </p>
+          </div>
+
+          {/* 공유 폴더 표시 이름 */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium flex items-center gap-2">
+              <Folder className="w-4 h-4" />
+              공유 폴더 표시 이름
+            </label>
+            <input
+              type="text"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="폴더 이름 (상대방에게 표시됨)"
+              className="w-full p-3 rounded-xl bg-muted/50 border border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+            <p className="text-xs text-muted-foreground">
+              상대방에게 보이는 공유 폴더 이름입니다
             </p>
           </div>
 

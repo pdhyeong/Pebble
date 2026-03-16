@@ -7,15 +7,15 @@
 // 두 노드가 mDNS로 발견되면 자동으로 연결되고, 파일 목록 및 파일 전송을 테스트합니다.
 
 use futures::prelude::*;
-use libp2p::{mdns, identify, ping, request_response, swarm::SwarmEvent, SwarmBuilder, StreamProtocol, PeerId};
+use libp2p::{
+    identify, mdns, ping, request_response, swarm::SwarmEvent, PeerId, StreamProtocol, SwarmBuilder,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{self, Write as IoWrite};
 use std::path::PathBuf;
 use std::time::Duration;
-
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileInfo {
@@ -83,7 +83,11 @@ impl request_response::Codec for FileListCodec {
     type Request = FileListRequest;
     type Response = FileListResponse;
 
-    async fn read_request<T>(&mut self, _protocol: &Self::Protocol, io: &mut T) -> io::Result<Self::Request>
+    async fn read_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -92,11 +96,14 @@ impl request_response::Codec for FileListCodec {
         let len = u32::from_be_bytes(len_buf) as usize;
         let mut buf = vec![0u8; len];
         io.read_exact(&mut buf).await?;
-        serde_json::from_slice(&buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    async fn read_response<T>(&mut self, _protocol: &Self::Protocol, io: &mut T) -> io::Result<Self::Response>
+    async fn read_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -105,16 +112,20 @@ impl request_response::Codec for FileListCodec {
         let len = u32::from_be_bytes(len_buf) as usize;
         let mut buf = vec![0u8; len];
         io.read_exact(&mut buf).await?;
-        serde_json::from_slice(&buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    async fn write_request<T>(&mut self, _protocol: &Self::Protocol, io: &mut T, req: Self::Request) -> io::Result<()>
+    async fn write_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        req: Self::Request,
+    ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&req)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let data =
+            serde_json::to_vec(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let len = (data.len() as u32).to_be_bytes();
         io.write_all(&len).await?;
         io.write_all(&data).await?;
@@ -122,12 +133,17 @@ impl request_response::Codec for FileListCodec {
         Ok(())
     }
 
-    async fn write_response<T>(&mut self, _protocol: &Self::Protocol, io: &mut T, res: Self::Response) -> io::Result<()>
+    async fn write_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        res: Self::Response,
+    ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&res)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let data =
+            serde_json::to_vec(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let len = (data.len() as u32).to_be_bytes();
         io.write_all(&len).await?;
         io.write_all(&data).await?;
@@ -145,7 +161,11 @@ impl request_response::Codec for FileTransferCodec {
     type Request = FileTransferRequest;
     type Response = FileTransferResponse;
 
-    async fn read_request<T>(&mut self, _protocol: &Self::Protocol, io: &mut T) -> io::Result<Self::Request>
+    async fn read_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -154,11 +174,14 @@ impl request_response::Codec for FileTransferCodec {
         let len = u32::from_be_bytes(len_buf) as usize;
         let mut buf = vec![0u8; len];
         io.read_exact(&mut buf).await?;
-        serde_json::from_slice(&buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    async fn read_response<T>(&mut self, _protocol: &Self::Protocol, io: &mut T) -> io::Result<Self::Response>
+    async fn read_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -167,16 +190,20 @@ impl request_response::Codec for FileTransferCodec {
         let len = u32::from_be_bytes(len_buf) as usize;
         let mut buf = vec![0u8; len];
         io.read_exact(&mut buf).await?;
-        serde_json::from_slice(&buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    async fn write_request<T>(&mut self, _protocol: &Self::Protocol, io: &mut T, req: Self::Request) -> io::Result<()>
+    async fn write_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        req: Self::Request,
+    ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&req)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let data =
+            serde_json::to_vec(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let len = (data.len() as u32).to_be_bytes();
         io.write_all(&len).await?;
         io.write_all(&data).await?;
@@ -184,12 +211,17 @@ impl request_response::Codec for FileTransferCodec {
         Ok(())
     }
 
-    async fn write_response<T>(&mut self, _protocol: &Self::Protocol, io: &mut T, res: Self::Response) -> io::Result<()>
+    async fn write_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        res: Self::Response,
+    ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&res)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let data =
+            serde_json::to_vec(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let len = (data.len() as u32).to_be_bytes();
         io.write_all(&len).await?;
         io.write_all(&data).await?;
@@ -207,7 +239,11 @@ impl request_response::Codec for FileUploadCodec {
     type Request = FileUploadRequest;
     type Response = FileUploadResponse;
 
-    async fn read_request<T>(&mut self, _protocol: &Self::Protocol, io: &mut T) -> io::Result<Self::Request>
+    async fn read_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -216,11 +252,14 @@ impl request_response::Codec for FileUploadCodec {
         let len = u32::from_be_bytes(len_buf) as usize;
         let mut buf = vec![0u8; len];
         io.read_exact(&mut buf).await?;
-        serde_json::from_slice(&buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    async fn read_response<T>(&mut self, _protocol: &Self::Protocol, io: &mut T) -> io::Result<Self::Response>
+    async fn read_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -229,16 +268,20 @@ impl request_response::Codec for FileUploadCodec {
         let len = u32::from_be_bytes(len_buf) as usize;
         let mut buf = vec![0u8; len];
         io.read_exact(&mut buf).await?;
-        serde_json::from_slice(&buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    async fn write_request<T>(&mut self, _protocol: &Self::Protocol, io: &mut T, req: Self::Request) -> io::Result<()>
+    async fn write_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        req: Self::Request,
+    ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&req)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let data =
+            serde_json::to_vec(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let len = (data.len() as u32).to_be_bytes();
         io.write_all(&len).await?;
         io.write_all(&data).await?;
@@ -246,12 +289,17 @@ impl request_response::Codec for FileUploadCodec {
         Ok(())
     }
 
-    async fn write_response<T>(&mut self, _protocol: &Self::Protocol, io: &mut T, res: Self::Response) -> io::Result<()>
+    async fn write_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        res: Self::Response,
+    ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&res)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let data =
+            serde_json::to_vec(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let len = (data.len() as u32).to_be_bytes();
         io.write_all(&len).await?;
         io.write_all(&data).await?;
@@ -269,7 +317,11 @@ impl request_response::Codec for DeviceInfoCodec {
     type Request = DeviceInfoRequest;
     type Response = DeviceInfoResponse;
 
-    async fn read_request<T>(&mut self, _protocol: &Self::Protocol, io: &mut T) -> io::Result<Self::Request>
+    async fn read_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -278,11 +330,14 @@ impl request_response::Codec for DeviceInfoCodec {
         let len = u32::from_be_bytes(len_buf) as usize;
         let mut buf = vec![0u8; len];
         io.read_exact(&mut buf).await?;
-        serde_json::from_slice(&buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    async fn read_response<T>(&mut self, _protocol: &Self::Protocol, io: &mut T) -> io::Result<Self::Response>
+    async fn read_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -291,16 +346,20 @@ impl request_response::Codec for DeviceInfoCodec {
         let len = u32::from_be_bytes(len_buf) as usize;
         let mut buf = vec![0u8; len];
         io.read_exact(&mut buf).await?;
-        serde_json::from_slice(&buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    async fn write_request<T>(&mut self, _protocol: &Self::Protocol, io: &mut T, req: Self::Request) -> io::Result<()>
+    async fn write_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        req: Self::Request,
+    ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&req)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let data =
+            serde_json::to_vec(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let len = (data.len() as u32).to_be_bytes();
         io.write_all(&len).await?;
         io.write_all(&data).await?;
@@ -308,12 +367,17 @@ impl request_response::Codec for DeviceInfoCodec {
         Ok(())
     }
 
-    async fn write_response<T>(&mut self, _protocol: &Self::Protocol, io: &mut T, res: Self::Response) -> io::Result<()>
+    async fn write_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        res: Self::Response,
+    ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&res)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let data =
+            serde_json::to_vec(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let len = (data.len() as u32).to_be_bytes();
         io.write_all(&len).await?;
         io.write_all(&data).await?;
@@ -365,7 +429,9 @@ fn list_files(base_path: &PathBuf, relative_path: &str) -> FileListResponse {
 
                     FileInfo {
                         name: entry.file_name().to_string_lossy().to_string(),
-                        path: entry.path().strip_prefix(base_path)
+                        path: entry
+                            .path()
+                            .strip_prefix(base_path)
                             .map(|p| format!("/{}", p.display()))
                             .unwrap_or_else(|_| entry.path().display().to_string()),
                         is_dir,
@@ -448,14 +514,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // 테스트 파일 생성 (폴더에 파일이 없으면)
     let test_file = shared_folder.join("test_file.txt");
     if !test_file.exists() {
-        std::fs::write(&test_file, format!("안녕하세요! {}에서 보내는 테스트 파일입니다.\n생성 시간: {:?}", device_name, std::time::SystemTime::now()))?;
+        std::fs::write(
+            &test_file,
+            format!(
+                "안녕하세요! {}에서 보내는 테스트 파일입니다.\n생성 시간: {:?}",
+                device_name,
+                std::time::SystemTime::now()
+            ),
+        )?;
         println!("📝 테스트 파일 생성: {:?}", test_file);
     }
 
     let test_subdir = shared_folder.join("test_subdir");
     if !test_subdir.exists() {
         std::fs::create_dir_all(&test_subdir)?;
-        std::fs::write(test_subdir.join("nested_file.txt"), "하위 폴더의 파일입니다.")?;
+        std::fs::write(
+            test_subdir.join("nested_file.txt"),
+            "하위 폴더의 파일입니다.",
+        )?;
         println!("📁 테스트 하위 폴더 생성: {:?}", test_subdir);
     }
 
@@ -468,32 +544,53 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )?
         .with_behaviour(|key| {
             let mdns = mdns::tokio::Behaviour::new(Default::default(), key.public().to_peer_id())?;
-            let identify = identify::Behaviour::new(
-                identify::Config::new("/pebble/1.0.0".into(), key.public())
-            );
+            let identify = identify::Behaviour::new(identify::Config::new(
+                "/pebble/1.0.0".into(),
+                key.public(),
+            ));
             let ping = ping::Behaviour::new(ping::Config::new());
 
             let file_list = request_response::Behaviour::new(
-                [(StreamProtocol::new("/pebble/file-list/1.0.0"), request_response::ProtocolSupport::Full)],
+                [(
+                    StreamProtocol::new("/pebble/file-list/1.0.0"),
+                    request_response::ProtocolSupport::Full,
+                )],
                 request_response::Config::default(),
             );
 
             let file_transfer = request_response::Behaviour::new(
-                [(StreamProtocol::new("/pebble/file-transfer/1.0.0"), request_response::ProtocolSupport::Full)],
+                [(
+                    StreamProtocol::new("/pebble/file-transfer/1.0.0"),
+                    request_response::ProtocolSupport::Full,
+                )],
                 request_response::Config::default(),
             );
 
             let file_upload = request_response::Behaviour::new(
-                [(StreamProtocol::new("/pebble/file-upload/1.0.0"), request_response::ProtocolSupport::Full)],
+                [(
+                    StreamProtocol::new("/pebble/file-upload/1.0.0"),
+                    request_response::ProtocolSupport::Full,
+                )],
                 request_response::Config::default(),
             );
 
             let device_info = request_response::Behaviour::new(
-                [(StreamProtocol::new("/pebble/device-info/1.0.0"), request_response::ProtocolSupport::Full)],
+                [(
+                    StreamProtocol::new("/pebble/device-info/1.0.0"),
+                    request_response::ProtocolSupport::Full,
+                )],
                 request_response::Config::default(),
             );
 
-            Ok(MyBehaviour { mdns, identify, ping, file_list, file_transfer, file_upload, device_info })
+            Ok(MyBehaviour {
+                mdns,
+                identify,
+                ping,
+                file_list,
+                file_transfer,
+                file_upload,
+                device_info,
+            })
         })?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60 * 60)))
         .build();

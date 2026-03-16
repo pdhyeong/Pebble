@@ -107,7 +107,7 @@ export function ActivityView() {
               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-pink-400 to-rose-400 flex items-center justify-center">
                 <HardDrive className="w-4 h-4 text-white" />
               </div>
-              <span className="text-xs text-muted-foreground">공유 폴더</span>
+              <span className="text-xs text-muted-foreground">공유 폴더 용량</span>
             </div>
             <p className="text-xl font-bold">
               {folderStats ? formatSize(folderStats.total_size) : "로딩..."}
@@ -136,17 +136,17 @@ export function ActivityView() {
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
                 className={`p-3 rounded-xl border transition-colors ${activity.status === "completed"
-                    ? "bg-card/50 border-border/50 hover:bg-card"
-                    : activity.status === "failed"
-                      ? "bg-destructive/10 border-destructive/20"
-                      : "bg-muted/30 border-muted"
+                  ? "bg-card/50 border-border/50 hover:bg-card"
+                  : activity.status === "failed"
+                    ? "bg-destructive/10 border-destructive/20"
+                    : "bg-muted/30 border-muted"
                   }`}
               >
                 <div className="flex items-center gap-3">
                   <div
                     className={`w-10 h-10 rounded-lg flex items-center justify-center ${activity.transfer_type === "download"
-                        ? "bg-blue-500/20"
-                        : "bg-green-500/20"
+                      ? "bg-blue-500/20"
+                      : "bg-green-500/20"
                       }`}
                   >
                     {activity.transfer_type === "download" ? (
@@ -170,10 +170,10 @@ export function ActivityView() {
                   <div className="text-right">
                     <p
                       className={`text-xs font-medium ${activity.status === "completed"
-                          ? "text-green-500"
-                          : activity.status === "failed"
-                            ? "text-destructive"
-                            : "text-muted-foreground"
+                        ? "text-green-500"
+                        : activity.status === "failed"
+                          ? "text-destructive"
+                          : "text-muted-foreground"
                         }`}
                     >
                       {activity.status === "completed"

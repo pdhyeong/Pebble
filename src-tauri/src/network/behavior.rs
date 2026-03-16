@@ -499,8 +499,6 @@ impl request_response::Codec for PairingCodec {
     }
 }
 
-// ===== NetworkBehaviour =====
-
 #[derive(NetworkBehaviour)]
 pub struct MyBehaviour {
     pub mdns: mdns::tokio::Behaviour,

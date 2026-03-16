@@ -180,9 +180,31 @@ export function useP2pEventListeners(state: P2pEventState) {
         // 파일 다운로드 이벤트
         unlisteners.push(
             listen<string>("file-download-started", (event) => {
-                addLog(`📥 파일 다운로드 시작: ${event.payload}`);
-                setIsDownloading(true);
-                setDownloadProgress(0);
+                try {
+                    const data = JSON.parse(event.payload);
+                    addLog(`📥 파일 다운로드 시작: ${data.file_name || event.payload}`);
+                    setIsDownloading(true);
+                    setDownloadProgress(0);
+
+                    const transferId = data.transfer_id || crypto.randomUUID();
+                    setActiveTransfers((prev) => {
+                        const newMap = new Map(prev);
+                        newMap.set(transferId, {
+                            type: "download",
+                            fileName: data.file_name || "Unknown",
+                            progress: 0,
+                            bytesTransferred: 0,
+                            totalBytes: data.total_size || 0,
+                            speed: 0,
+                            transferId,
+                        });
+                        return newMap;
+                    });
+                } catch {
+                    addLog(`📥 파일 다운로드 시작: ${event.payload}`);
+                    setIsDownloading(true);
+                    setDownloadProgress(0);
+                }
             })
         );
 
@@ -190,7 +212,38 @@ export function useP2pEventListeners(state: P2pEventState) {
             listen<string>("file-download-progress", (event) => {
                 try {
                     const data = JSON.parse(event.payload);
-                    setDownloadProgress(data.progress);
+                    const progress = Math.round(data.progress);
+                    setDownloadProgress(progress);
+
+                    const transferId = data.transfer_id || "";
+                    setActiveTransfers((prev) => {
+                        const newMap = new Map(prev);
+                        const transfer = newMap.get(transferId);
+
+                        if (transfer) {
+                            // Update existing transfer
+                            const bytesTransferred = Math.round(
+                                (progress / 100) * transfer.totalBytes
+                            );
+                            newMap.set(transferId, {
+                                ...transfer,
+                                progress,
+                                bytesTransferred,
+                            });
+                        } else if (transferId) {
+                            // Create new transfer on first progress event
+                            newMap.set(transferId, {
+                                type: "download",
+                                fileName: data.file_name || "Downloading...",
+                                progress,
+                                bytesTransferred: 0,
+                                totalBytes: 0, // Will be calculated from chunks
+                                speed: 0,
+                                transferId,
+                            });
+                        }
+                        return newMap;
+                    });
                 } catch { }
             })
         );
@@ -202,7 +255,16 @@ export function useP2pEventListeners(state: P2pEventState) {
                     addLog(`✅ 파일 다운로드 완료: ${data.saved_path}`);
                     setIsDownloading(false);
                     setDownloadProgress(100);
-                    setTimeout(() => setDownloadProgress(0), 1000);
+
+                    const transferId = data.transfer_id || "";
+                    setTimeout(() => {
+                        setDownloadProgress(0);
+                        setActiveTransfers((prev) => {
+                            const newMap = new Map(prev);
+                            newMap.delete(transferId);
+                            return newMap;
+                        });
+                    }, 1000);
                 } catch {
                     addLog(`✅ 파일 다운로드 완료`);
                     setIsDownloading(false);
@@ -349,6 +411,8 @@ export function useP2pEventListeners(state: P2pEventState) {
             listen<string>("pairing-approved", (event) => {
                 try {
                     const data = JSON.parse(event.payload);
+                    console.log("🔍 Pairing approved data:", data);
+                    console.log("🔍 Shared folder name:", data.shared_folder_name);
                     addLog(`✅ 페어링 승인: ${data.device_name}`);
                     setConnectedPeers((prev) => {
                         if (prev.find((p) => p.peerId === data.peer_id)) return prev;

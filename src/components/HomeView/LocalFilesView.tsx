@@ -3,14 +3,12 @@ import {
   Folder,
   ArrowLeft,
   RefreshCw,
-  Settings,
   FolderOpen,
   Search,
   Grid3x3,
   List,
 } from "lucide-react";
 import { useP2pContext } from "../../contexts/P2pContext";
-import { SharedFolderModal } from "../SharedFolderModal";
 import { FileListItem } from "./FileListItem";
 import { FileGridItem } from "./FileGridItem";
 import { SelectionBar } from "./SelectionBar";
@@ -23,7 +21,6 @@ interface LocalFilesViewProps {
 }
 
 export function LocalFilesView({ onBack }: LocalFilesViewProps) {
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [displayMode, setDisplayMode] = useState<DisplayMode>("list");
   const [searchQuery, setSearchQuery] = useState("");
   const [showSendModal, setShowSendModal] = useState(false);
@@ -35,8 +32,6 @@ export function LocalFilesView({ onBack }: LocalFilesViewProps) {
     myDeviceName,
     sharedFolderPath,
     refreshLocalFiles,
-    setMyDeviceName,
-    setSharedFolder,
     uploadFile,
   } = useP2pContext();
 
@@ -46,11 +41,6 @@ export function LocalFilesView({ onBack }: LocalFilesViewProps) {
     toggleSelection,
     cancelSelection,
   } = useFileSelection();
-
-  const handleSaveSettings = async (newPath: string, newDeviceName: string) => {
-    await setSharedFolder(newPath);
-    await setMyDeviceName(newDeviceName);
-  };
 
   // 폴더 진입 핸들러
   const handleFolderClick = (folderPath: string) => {
@@ -134,13 +124,6 @@ export function LocalFilesView({ onBack }: LocalFilesViewProps) {
             className="p-2 rounded-xl hover:bg-muted/50 transition-colors"
           >
             <RefreshCw className="w-5 h-5" />
-          </button>
-
-          <button
-            onClick={() => setShowSettingsModal(true)}
-            className="p-2 rounded-xl hover:bg-muted/50 transition-colors"
-          >
-            <Settings className="w-5 h-5 text-muted-foreground" />
           </button>
         </div>
 
@@ -244,15 +227,6 @@ export function LocalFilesView({ onBack }: LocalFilesViewProps) {
         peers={connectedPeers}
         onSend={handleSendToDevice}
         onClose={() => setShowSendModal(false)}
-      />
-
-      {/* Settings Modal */}
-      <SharedFolderModal
-        isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
-        currentPath={sharedFolderPath}
-        currentDeviceName={myDeviceName}
-        onSave={handleSaveSettings}
       />
     </div>
   );

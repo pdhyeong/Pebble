@@ -72,3 +72,26 @@ pub struct IncomingTransferState {
 
 /// 청크 크기 (1MB)
 pub const CHUNK_SIZE: usize = 1024 * 1024;
+
+/// 통합 P2P 커맨드 enum
+/// 프론트엔드 → 엔진으로의 모든 명령을 단일 채널로 전달
+pub enum P2pCommand {
+    /// 피어에 연결 (Multiaddr 문자열)
+    Dial(String),
+    /// 원격 피어의 파일 목록 요청
+    RequestFileList(FileListRequestMsg),
+    /// 원격 피어에서 파일 다운로드
+    RequestFileTransfer(FileTransferRequestMsg),
+    /// 원격 피어에 파일 업로드 (청크 스트림)
+    RequestFileStream(FileTransferStreamRequestMsg),
+    /// 공유 폴더 경로 업데이트
+    UpdateSharedFolder(PathBuf),
+    /// 원격 피어에 페어링 요청
+    RequestPairing(PairingRequestMsg),
+    /// 페어링 승인/거절
+    ApprovePairing(PairingApprovalMsg),
+    /// 진행 중인 전송 취소
+    CancelTransfer(CancelTransferMsg),
+    /// 엔진 종료
+    Shutdown,
+}

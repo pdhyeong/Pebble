@@ -1,7 +1,5 @@
-import { useState } from "react";
-import { Folder, FolderOpen, Monitor, Settings, Wifi } from "lucide-react";
+import { Folder, FolderOpen, Monitor, Wifi } from "lucide-react";
 import { useP2pContext } from "../../contexts/P2pContext";
-import { SharedFolderModal } from "../SharedFolderModal";
 
 interface MainHomeViewProps {
   onOpenLocalFiles: () => void;
@@ -9,21 +7,12 @@ interface MainHomeViewProps {
 }
 
 export function MainHomeView({ onOpenLocalFiles, onSelectPeer }: MainHomeViewProps) {
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
-
   const {
     connectedPeers,
     localFiles,
     myDeviceName,
     sharedFolderPath,
-    setMyDeviceName,
-    setSharedFolder,
   } = useP2pContext();
-
-  const handleSaveSettings = async (newPath: string, newDeviceName: string) => {
-    await setSharedFolder(newPath);
-    await setMyDeviceName(newDeviceName);
-  };
 
   return (
     <div className="flex flex-col h-full">
@@ -36,12 +25,6 @@ export function MainHomeView({ onOpenLocalFiles, onSelectPeer }: MainHomeViewPro
               파일을 공유하고 전송하세요
             </p>
           </div>
-          <button
-            onClick={() => setShowSettingsModal(true)}
-            className="p-2.5 rounded-xl bg-muted/50 border border-border/50 hover:bg-muted transition-colors"
-          >
-            <Settings className="w-5 h-5 text-muted-foreground" />
-          </button>
         </div>
       </div>
 
@@ -136,15 +119,6 @@ export function MainHomeView({ onOpenLocalFiles, onSelectPeer }: MainHomeViewPro
           )}
         </section>
       </div>
-
-      {/* 공유 폴더 설정 모달 */}
-      <SharedFolderModal
-        isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
-        currentPath={sharedFolderPath}
-        currentDeviceName={myDeviceName}
-        onSave={handleSaveSettings}
-      />
     </div>
   );
 }

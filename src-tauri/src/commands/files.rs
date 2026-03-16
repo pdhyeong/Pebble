@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::State;
 
+use crate::network::P2pCommand;
 use crate::state::{LocalFileInfo, P2pState};
 
 /// 공유 폴더 경로 설정
@@ -28,11 +29,10 @@ pub async fn set_shared_folder(
 
     // P2P가 실행 중이면 엔진에도 알림
     if state.is_running.load(Ordering::SeqCst) {
-        let sender = state.shared_folder_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            tx.send(path_buf.clone())
-                .map_err(|e| format!("공유 폴더 변경 알림 실패: {}", e))?;
-        }
+        state
+            .send_command(P2pCommand::UpdateSharedFolder(path_buf))
+            .await
+            .map_err(|e| format!("공유 폴더 변경 알림 실패: {}", e))?;
     }
 
     Ok(format!("공유 폴더가 설정되었습니다: {}", path))
