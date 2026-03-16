@@ -1,9 +1,7 @@
 // 상태 관리 모듈
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 use crate::network::P2pCommand;
