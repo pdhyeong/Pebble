@@ -1,6 +1,7 @@
 import { X, FolderOpen, Check, User, Folder } from "lucide-react";
 import { useState, useEffect } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { pickFolder } from "../adapters/tauri/localFiles";
+import { describeError } from "../adapters/tauri/errors";
 
 interface SharedFolderModalProps {
   isOpen: boolean;
@@ -33,16 +34,12 @@ export function SharedFolderModal({
 
   const handleSelectFolder = async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: "공유 폴더 선택",
-      });
-      if (selected && typeof selected === "string") {
+      const selected = await pickFolder();
+      if (selected) {
         setFolderPath(selected);
       }
     } catch (e) {
-      console.error("폴더 선택 실패:", e);
+      console.error("폴더 선택 실패:", describeError(e));
     }
   };
 

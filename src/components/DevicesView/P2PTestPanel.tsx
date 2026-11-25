@@ -1,5 +1,5 @@
 import { Power, RefreshCw, Trash2, Square } from "lucide-react";
-import type { DiscoveredPeer, ConnectedPeer } from "../../contexts/P2pContext";
+import type { DiscoveredPeer, ConnectedPeer } from "../../core/p2pState";
 
 interface P2PTestPanelProps {
   isP2pRunning: boolean;

@@ -1,260 +1,226 @@
-// P2P 액션(API 호출) 훅
-import { useCallback } from "react";
-import type { DiscoveredPeer, LocalFileInfo, PairingRequest } from "./types";
-import {
-    startP2pEngine,
-    stopP2pEngine,
-    connectToPeer as apiConnectToPeer,
-    requestFileList as apiRequestFileList,
-    downloadFile as apiDownloadFile,
-    uploadFile as apiUploadFile,
-    requestPairing as apiRequestPairing,
-    respondPairing as apiRespondPairing,
-    setDeviceName,
-    setSharedFolder as apiSetSharedFolder,
-    setSharedFolderDisplayName as apiSetSharedFolderDisplayName,
-    setShowFolderName as apiSetShowFolderName,
-    getLocalSharedFiles,
-} from "./api";
+import { useCallback, useState, type Dispatch } from "react";
+import * as commands from "../../adapters/tauri/commands";
+import { describeError } from "../../adapters/tauri/errors";
+import { shortPeerId } from "../../core/p2pEvents";
+import type { DiscoveredPeer, P2pAction } from "../../core/p2pState";
 
-interface P2pActionsState {
-    discoveredPeers: DiscoveredPeer[];
-    addLog: (message: string) => void;
-    setIsP2pRunning: React.Dispatch<React.SetStateAction<boolean>>;
-    setIsStarting: React.Dispatch<React.SetStateAction<boolean>>;
-    setIsStopping: React.Dispatch<React.SetStateAction<boolean>>;
-    setIsLoadingFiles: React.Dispatch<React.SetStateAction<boolean>>;
-    setIsDownloading: React.Dispatch<React.SetStateAction<boolean>>;
-    setIsUploading: React.Dispatch<React.SetStateAction<boolean>>;
-    setPairingRequest: React.Dispatch<React.SetStateAction<PairingRequest | null>>;
-    setDiscoveredPeers: React.Dispatch<React.SetStateAction<DiscoveredPeer[]>>;
-    setLocalFiles: React.Dispatch<React.SetStateAction<LocalFileInfo[]>>;
-    setMyDeviceNameState: React.Dispatch<React.SetStateAction<string>>;
-    setSharedFolderPathState: React.Dispatch<React.SetStateAction<string>>;
-    setSharedFolderDisplayNameState: React.Dispatch<React.SetStateAction<string>>;
-    setShowFolderNameState: React.Dispatch<React.SetStateAction<boolean>>;
-}
+export function useP2pActions(dispatch: Dispatch<P2pAction>, discoveredPeers: DiscoveredPeer[]) {
+  const [pendingDownloads, setPendingDownloads] = useState(0);
+  const [pendingUploads, setPendingUploads] = useState(0);
+  const log = useCallback(
+    (message: string) => dispatch({ type: "log", message, at: Date.now() }),
+    [dispatch],
+  );
 
-export function useP2pActions(state: P2pActionsState) {
-    const {
-        discoveredPeers,
-        addLog,
-        setIsP2pRunning,
-        setIsStarting,
-        setIsStopping,
-        setIsLoadingFiles,
-        setIsDownloading,
-        setIsUploading,
-        setPairingRequest,
-        setDiscoveredPeers,
-        setLocalFiles,
-        setMyDeviceNameState,
-        setSharedFolderPathState,
-        setSharedFolderDisplayNameState,
-        setShowFolderNameState,
-    } = state;
+  const startP2p = useCallback(async () => {
+    dispatch({ type: "engine/starting" });
+    log("🚀 P2P 엔진 시작 중...");
+    try {
+      await commands.startP2p();
+      dispatch({ type: "engine/started" });
+    } catch (e) {
+      log(`❌ P2P 시작 실패: ${describeError(e)}`);
+    } finally {
+      dispatch({ type: "engine/startFinished" });
+    }
+  }, [dispatch, log]);
 
-    const startP2p = useCallback(async () => {
-        setIsStarting(true);
-        addLog("🚀 P2P 엔진 시작 중...");
+  const stopP2p = useCallback(async () => {
+    dispatch({ type: "engine/stopping" });
+    log("🛑 P2P 엔진 종료 중...");
+    try {
+      await commands.stopP2p();
+    } catch (e) {
+      log(`❌ P2P 종료 실패: ${describeError(e)}`);
+      dispatch({ type: "engine/stopFailed" });
+    }
+  }, [dispatch, log]);
 
-        try {
-            const result = await startP2pEngine();
-            addLog(result);
-            setIsP2pRunning(true);
-        } catch (e) {
-            addLog(`❌ P2P 시작 실패: ${e}`);
-            console.error("P2P 시작 실패:", e);
-        } finally {
-            setIsStarting(false);
+  const initialize = useCallback(async () => {
+    try {
+      const isP2pRunning = await commands.getP2pStatus();
+      const myDeviceName = await commands.getDeviceName();
+      const sharedFolderPath = await commands.getSharedFolder();
+      const sharedFolderDisplayName = await commands.getSharedFolderDisplayName();
+      dispatch({
+        type: "settings/loaded",
+        settings: { isP2pRunning, myDeviceName, sharedFolderPath, sharedFolderDisplayName },
+      });
+      dispatch({ type: "localFiles/loaded", files: await commands.getLocalSharedFiles("/") });
+      if (!isP2pRunning) await startP2p();
+    } catch (e) {
+      log(`❌ 초기 데이터 로드 실패: ${describeError(e)}`);
+    }
+  }, [dispatch, log, startP2p]);
+
+  const connectToPeer = useCallback(
+    async (peerAddr: string) => {
+      log(`📞 연결 및 페어링 시도: ${peerAddr}`);
+      try {
+        await commands.connectToPeer(peerAddr);
+        const peer = discoveredPeers.find((p) => p.address === peerAddr);
+        if (peer) {
+          log(`🔐 자동 페어링 요청: ${shortPeerId(peer.peerId)}`);
+          await commands.requestPairing(peer.peerId);
         }
-    }, [addLog, setIsP2pRunning, setIsStarting]);
+      } catch (e) {
+        log(`❌ 연결/페어링 실패: ${describeError(e)}`);
+      }
+    },
+    [log, discoveredPeers],
+  );
 
-    const stopP2p = useCallback(async () => {
-        setIsStopping(true);
-        addLog("🛑 P2P 엔진 종료 중...");
+  const requestFileList = useCallback(
+    async (peerId: string, path: string = "/") => {
+      log(`📂 파일 목록 요청: ${shortPeerId(peerId)} (${path})`);
+      dispatch({ type: "remoteFiles/loading" });
+      try {
+        await commands.requestFileList(peerId, path);
+      } catch (e) {
+        log(`❌ 파일 목록 요청 실패: ${describeError(e)}`);
+        dispatch({ type: "remoteFiles/loadFailed" });
+      }
+    },
+    [dispatch, log],
+  );
 
-        try {
-            const result = await stopP2pEngine();
-            addLog(result);
-        } catch (e) {
-            addLog(`❌ P2P 종료 실패: ${e}`);
-            console.error("P2P 종료 실패:", e);
-            setIsStopping(false);
-        }
-    }, [addLog, setIsStopping]);
+  const downloadFile = useCallback(
+    async (peerId: string, path: string): Promise<string | null> => {
+      log(`📥 파일 다운로드 요청: ${path}`);
+      setPendingDownloads((n) => n + 1);
+      try {
+        return await commands.downloadFile(peerId, path);
+      } catch (e) {
+        log(`❌ 파일 다운로드 요청 실패: ${describeError(e)}`);
+        return null;
+      } finally {
+        setPendingDownloads((n) => n - 1);
+      }
+    },
+    [log],
+  );
 
-    const connectToPeer = useCallback(
-        async (peerAddr: string) => {
-            addLog(`📞 연결 및 페어링 시도: ${peerAddr}`);
+  const uploadFile = useCallback(
+    async (peerId: string, filePath: string, remotePath: string = "/"): Promise<string | null> => {
+      log(`📤 파일 업로드 요청: ${filePath} -> ${remotePath}`);
+      setPendingUploads((n) => n + 1);
+      try {
+        return await commands.uploadFile(peerId, filePath, remotePath);
+      } catch (e) {
+        log(`❌ 파일 업로드 요청 실패: ${describeError(e)}`);
+        return null;
+      } finally {
+        setPendingUploads((n) => n - 1);
+      }
+    },
+    [log],
+  );
 
-            try {
-                await apiConnectToPeer(peerAddr);
+  const cancelTransfer = useCallback(
+    async (transferId: string) => {
+      try {
+        await commands.cancelTransfer(transferId);
+      } catch (e) {
+        log(`❌ 전송 취소 실패: ${describeError(e)}`);
+      }
+    },
+    [log],
+  );
 
-                const peer = discoveredPeers.find((p) => p.address === peerAddr);
-                if (peer) {
-                    addLog(`🔐 자동 페어링 요청: ${peer.peerId.slice(0, 12)}...`);
-                    await apiRequestPairing(peer.peerId);
-                }
-            } catch (e) {
-                addLog(`❌ 연결/페어링 실패: ${e}`);
-                console.error("연결/페어링 실패:", e);
-            }
-        },
-        [addLog, discoveredPeers]
-    );
+  const requestPairing = useCallback(
+    async (peerId: string) => {
+      log(`🔐 페어링 요청: ${shortPeerId(peerId)}`);
+      try {
+        await commands.requestPairing(peerId);
+      } catch (e) {
+        log(`❌ 페어링 요청 실패: ${describeError(e)}`);
+      }
+    },
+    [log],
+  );
 
-    const requestFileList = useCallback(
-        async (peerId: string, path: string = "/") => {
-            addLog(`📂 파일 목록 요청: ${peerId.slice(0, 12)}... (${path})`);
-            setIsLoadingFiles(true);
+  const respondPairing = useCallback(
+    async (peerId: string, approved: boolean) => {
+      log(`${approved ? "✅ 승인" : "❌ 거절"}: ${shortPeerId(peerId)}`);
+      try {
+        await commands.respondPairing(peerId, approved);
+        dispatch({ type: "pairing/requestCleared" });
+      } catch (e) {
+        log(`❌ 페어링 응답 실패: ${describeError(e)}`);
+      }
+    },
+    [dispatch, log],
+  );
 
-            try {
-                await apiRequestFileList(peerId, path);
-            } catch (e) {
-                addLog(`❌ 파일 목록 요청 실패: ${e}`);
-                console.error("파일 목록 요청 실패:", e);
-                setIsLoadingFiles(false);
-            }
-        },
-        [addLog, setIsLoadingFiles]
-    );
+  const clearAll = useCallback(() => dispatch({ type: "peers/cleared" }), [dispatch]);
 
-    const downloadFile = useCallback(
-        async (peerId: string, path: string) => {
-            addLog(`📥 파일 다운로드 요청: ${path}`);
-            setIsDownloading(true);
+  const setMyDeviceName = useCallback(
+    async (name: string) => {
+      try {
+        await commands.setDeviceName(name);
+        dispatch({ type: "settings/deviceName", name });
+        log(`📱 기기 이름 설정: ${name}`);
+      } catch (e) {
+        log(`❌ 기기 이름 설정 실패: ${describeError(e)}`);
+      }
+    },
+    [dispatch, log],
+  );
 
-            try {
-                await apiDownloadFile(peerId, path);
-            } catch (e) {
-                addLog(`❌ 파일 다운로드 요청 실패: ${e}`);
-                console.error("파일 다운로드 요청 실패:", e);
-                setIsDownloading(false);
-            }
-        },
-        [addLog, setIsDownloading]
-    );
+  const setSharedFolder = useCallback(
+    async (path: string) => {
+      try {
+        await commands.setSharedFolder(path);
+        dispatch({ type: "settings/sharedFolder", path });
+        log(`📁 공유 폴더 설정: ${path}`);
+        dispatch({ type: "localFiles/loaded", files: await commands.getLocalSharedFiles("/") });
+      } catch (e) {
+        log(`❌ 공유 폴더 설정 실패: ${describeError(e)}`);
+      }
+    },
+    [dispatch, log],
+  );
 
-    const uploadFile = useCallback(
-        async (peerId: string, filePath: string, remotePath: string = "/") => {
-            addLog(`📤 파일 업로드 요청: ${filePath} -> ${remotePath}`);
-            setIsUploading(true);
+  const setSharedFolderDisplayName = useCallback(
+    async (name: string) => {
+      try {
+        await commands.setSharedFolderDisplayName(name);
+        dispatch({ type: "settings/sharedFolderDisplayName", name });
+      } catch (e) {
+        log(`❌ 공유 폴더 표시 이름 설정 실패: ${describeError(e)}`);
+      }
+    },
+    [dispatch, log],
+  );
 
-            try {
-                await apiUploadFile(peerId, filePath, remotePath);
-            } catch (e) {
-                addLog(`❌ 파일 업로드 요청 실패: ${e}`);
-                console.error("파일 업로드 요청 실패:", e);
-                setIsUploading(false);
-            }
-        },
-        [addLog, setIsUploading]
-    );
+  const refreshLocalFiles = useCallback(
+    async (relativePath: string = "/") => {
+      try {
+        dispatch({ type: "localFiles/loaded", files: await commands.getLocalSharedFiles(relativePath) });
+      } catch (e) {
+        log(`❌ 파일 목록 새로고침 실패: ${describeError(e)}`);
+      }
+    },
+    [dispatch, log],
+  );
 
-    const requestPairing = useCallback(
-        async (peerId: string) => {
-            addLog(`🔐 페어링 요청: ${peerId.slice(0, 12)}...`);
-
-            try {
-                await apiRequestPairing(peerId);
-            } catch (e) {
-                addLog(`❌ 페어링 요청 실패: ${e}`);
-                console.error("페어링 요청 실패:", e);
-            }
-        },
-        [addLog]
-    );
-
-    const respondPairing = useCallback(
-        async (peerId: string, approved: boolean) => {
-            addLog(`${approved ? "✅ 승인" : "❌ 거절"}: ${peerId.slice(0, 12)}...`);
-
-            try {
-                await apiRespondPairing(peerId, approved);
-                setPairingRequest(null);
-            } catch (e) {
-                addLog(`❌ 페어링 응답 실패: ${e}`);
-                console.error("페어링 응답 실패:", e);
-            }
-        },
-        [addLog, setPairingRequest]
-    );
-
-    const clearAll = useCallback(() => {
-        setDiscoveredPeers([]);
-    }, [setDiscoveredPeers]);
-
-    const setMyDeviceName = useCallback(
-        async (name: string) => {
-            try {
-                await setDeviceName(name);
-                setMyDeviceNameState(name);
-                addLog(`📱 기기 이름 설정: ${name}`);
-            } catch (e) {
-                console.error("기기 이름 설정 실패:", e);
-            }
-        },
-        [addLog, setMyDeviceNameState]
-    );
-
-    const setSharedFolder = useCallback(
-        async (path: string) => {
-            try {
-                await apiSetSharedFolder(path);
-                setSharedFolderPathState(path);
-                addLog(`📁 공유 폴더 설정: ${path}`);
-                const files = await getLocalSharedFiles("/");
-                setLocalFiles(files);
-            } catch (e) {
-                console.error("공유 폴더 설정 실패:", e);
-            }
-        },
-        [addLog, setSharedFolderPathState, setLocalFiles]
-    );
-
-    const setSharedFolderDisplayName = useCallback(
-        async (name: string) => {
-            await apiSetSharedFolderDisplayName(name);
-            setSharedFolderDisplayNameState(name);
-        },
-        [setSharedFolderDisplayNameState]
-    );
-
-    const setShowFolderName = useCallback(
-        async (show: boolean) => {
-            await apiSetShowFolderName(show);
-            setShowFolderNameState(show);
-        },
-        [setShowFolderNameState]
-    );
-
-    const refreshLocalFiles = useCallback(
-        async (relativePath: string = "/") => {
-            try {
-                const files = await getLocalSharedFiles(relativePath);
-                setLocalFiles(files);
-            } catch (e) {
-                console.error("파일 목록 새로고침 실패:", e);
-            }
-        },
-        [setLocalFiles]
-    );
-
-    return {
-        startP2p,
-        stopP2p,
-        connectToPeer,
-        requestFileList,
-        downloadFile,
-        uploadFile,
-        requestPairing,
-        respondPairing,
-        clearAll,
-        setMyDeviceName,
-        setSharedFolder,
-        setSharedFolderDisplayName,
-        setShowFolderName,
-        refreshLocalFiles,
-    };
+  return {
+    initialize,
+    pendingDownloads,
+    pendingUploads,
+    startP2p,
+    stopP2p,
+    connectToPeer,
+    requestFileList,
+    downloadFile,
+    uploadFile,
+    cancelTransfer,
+    requestPairing,
+    respondPairing,
+    clearAll,
+    setMyDeviceName,
+    setSharedFolder,
+    setSharedFolderDisplayName,
+    refreshLocalFiles,
+  };
 }

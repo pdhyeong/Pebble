@@ -1,6 +1,6 @@
 import { X, Send } from "lucide-react";
 
-interface DroppedFile {
+export interface DroppedFile {
     name: string;
     path: string;
     size: number;

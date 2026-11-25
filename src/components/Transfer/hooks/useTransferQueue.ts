@@ -1,4 +1,5 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { onEvent } from "../../../adapters/tauri/events";
 
 export interface TransferItem {
     id: string;
@@ -12,12 +13,75 @@ export interface TransferItem {
     status: "waiting" | "uploading" | "complete" | "error";
     error?: string;
     startTime?: number;
+    transferId?: string;
 }
 
-const MAX_CONCURRENT = 3;
+type Outcome = { status: "complete" } | { status: "error"; error: string };
 
-export function useTransferQueue() {
+type UploadFn = (peerId: string, filePath: string, remotePath: string) => Promise<string | null>;
+type CancelFn = (transferId: string) => Promise<void>;
+
+const MAX_CONCURRENT = 3;
+const MAX_UNMATCHED_OUTCOMES = 200;
+
+function bytesPerSecond(bytesDone: number, startTime: number | undefined, now: number): number {
+    const seconds = startTime ? (now - startTime) / 1000 : 0;
+    return seconds > 0 ? bytesDone / seconds : 0;
+}
+
+function applyOutcome(item: TransferItem, outcome: Outcome): TransferItem {
+    return outcome.status === "complete"
+        ? { ...item, status: "complete", progress: 100 }
+        : { ...item, status: "error", error: outcome.error };
+}
+
+export function useTransferQueue(upload: UploadFn, cancel: CancelFn) {
     const [queue, setQueue] = useState<TransferItem[]>([]);
+    const queueRef = useRef(queue);
+    queueRef.current = queue;
+    const itemByTransfer = useRef(new Map<string, string>());
+    const unmatchedOutcomes = useRef(new Map<string, Outcome>());
+    const cancelledBeforeLink = useRef(new Set<string>());
+
+    const updateItem = useCallback((id: string, update: (item: TransferItem) => TransferItem) => {
+        setQueue((prev) => prev.map((item) => (item.id === id ? update(item) : item)));
+    }, []);
+
+    const settleByTransferId = useCallback((transferId: string, outcome: Outcome) => {
+        const itemId = itemByTransfer.current.get(transferId);
+        if (!itemId) {
+            const unmatched = unmatchedOutcomes.current;
+            unmatched.set(transferId, outcome);
+            if (unmatched.size > MAX_UNMATCHED_OUTCOMES) {
+                const oldest = unmatched.keys().next().value;
+                if (oldest !== undefined) unmatched.delete(oldest);
+            }
+            return;
+        }
+        itemByTransfer.current.delete(transferId);
+        updateItem(itemId, (item) => applyOutcome(item, outcome));
+    }, [updateItem]);
+
+    const linkUpload = useCallback((itemId: string, transferId: string | null) => {
+        if (cancelledBeforeLink.current.delete(itemId)) {
+            if (transferId) void cancel(transferId);
+            return;
+        }
+        if (!transferId) {
+            updateItem(itemId, (current) => applyOutcome(current, { status: "error", error: "업로드 요청 실패" }));
+            return;
+        }
+        const early = unmatchedOutcomes.current.get(transferId);
+        if (early) {
+            unmatchedOutcomes.current.delete(transferId);
+        } else {
+            itemByTransfer.current.set(transferId, itemId);
+        }
+        updateItem(itemId, (current) => {
+            const linked = { ...current, transferId };
+            return early ? applyOutcome(linked, early) : linked;
+        });
+    }, [cancel, updateItem]);
 
     // 큐에 파일 추가
     const addFiles = useCallback(
@@ -39,61 +103,70 @@ export function useTransferQueue() {
             }));
 
             setQueue((prev) => [...prev, ...newItems]);
-            return newItems.map((item) => item.id);
         },
         []
     );
 
-    // 전송 시작
-    const startTransfer = useCallback((id: string) => {
+    useEffect(() => {
+        const uploading = queue.filter((q) => q.status === "uploading").length;
+        const next = queue.filter((q) => q.status === "waiting").slice(0, Math.max(0, MAX_CONCURRENT - uploading));
+        if (next.length === 0) return;
+
+        const startIds = new Set(next.map((item) => item.id));
         setQueue((prev) =>
             prev.map((item) =>
-                item.id === id
-                    ? { ...item, status: "uploading", startTime: Date.now() }
-                    : item
+                startIds.has(item.id) ? { ...item, status: "uploading", startTime: Date.now() } : item
             )
         );
-    }, []);
 
-    // 진행률 업데이트
-    const updateProgress = useCallback(
-        (id: string, progress: number, speed: number) => {
-            setQueue((prev) =>
-                prev.map((item) =>
-                    item.id === id ? { ...item, progress, speed } : item
-                )
-            );
-        },
-        []
-    );
+        for (const item of next) {
+            upload(item.peerId, item.filePath, item.remotePath).then((transferId) => linkUpload(item.id, transferId));
+        }
+    }, [queue, upload, linkUpload]);
 
-    // 전송 완료
-    const completeTransfer = useCallback((id: string) => {
-        setQueue((prev) =>
-            prev.map((item) =>
-                item.id === id ? { ...item, status: "complete", progress: 100 } : item
-            )
-        );
-    }, []);
-
-    // 전송 실패
-    const failTransfer = useCallback((id: string, error: string) => {
-        setQueue((prev) =>
-            prev.map((item) =>
-                item.id === id ? { ...item, status: "error", error } : item
-            )
-        );
-    }, []);
+    useEffect(() => {
+        const stops = [
+            onEvent("transfer-progress", (p) => {
+                if (p.direction !== "upload") return;
+                const now = Date.now();
+                setQueue((prev) =>
+                    prev.map((item) =>
+                        item.transferId === p.transfer_id && item.status === "uploading"
+                            ? {
+                                  ...item,
+                                  progress: Math.round(p.progress),
+                                  speed: bytesPerSecond(p.bytes_done, item.startTime, now),
+                              }
+                            : item
+                    )
+                );
+            }),
+            onEvent("transfer-completed", (p) => {
+                if (p.direction === "upload") settleByTransferId(p.transfer_id, { status: "complete" });
+            }),
+            onEvent("transfer-failed", (p) => {
+                if (p.direction === "upload") settleByTransferId(p.transfer_id, { status: "error", error: p.error });
+            }),
+            onEvent("transfer-cancelled", (p) => {
+                if (p.direction === "upload") settleByTransferId(p.transfer_id, { status: "error", error: "취소됨" });
+            }),
+        ];
+        return () => stops.forEach((stop) => stop());
+    }, [settleByTransferId]);
 
     // 전송 취소
     const cancelTransfer = useCallback((id: string) => {
+        const target = queueRef.current.find((item) => item.id === id);
+        if (target?.status === "uploading") {
+            if (target.transferId) {
+                itemByTransfer.current.delete(target.transferId);
+                void cancel(target.transferId);
+            } else {
+                cancelledBeforeLink.current.add(id);
+            }
+        }
         setQueue((prev) => prev.filter((item) => item.id !== id));
-    }, []);
-
-    // 큐 초기화
-    const clearQueue = useCallback(() => {
-        setQueue([]);
-    }, []);
+    }, [cancel]);
 
     // 완료된 항목 제거
     const clearCompleted = useCallback(() => {
@@ -107,20 +180,13 @@ export function useTransferQueue() {
         uploading: queue.filter((q) => q.status === "uploading").length,
         complete: queue.filter((q) => q.status === "complete").length,
         error: queue.filter((q) => q.status === "error").length,
-        canStartMore:
-            queue.filter((q) => q.status === "uploading").length < MAX_CONCURRENT,
     };
 
     return {
         queue,
         stats,
         addFiles,
-        startTransfer,
-        updateProgress,
-        completeTransfer,
-        failTransfer,
         cancelTransfer,
-        clearQueue,
         clearCompleted,
     };
 }

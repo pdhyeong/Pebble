@@ -1,48 +1,9 @@
 import { motion } from "motion/react";
 import { Upload, Download, Wifi, HardDrive } from "lucide-react";
-import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
-
-interface Activity {
-  id: string;
-  transfer_type: string; // "upload" or "download"
-  file_name: string;
-  peer_id: string;
-  device_name: string | null;
-  size: number;
-  timestamp: number;
-  status: string; // "completed", "failed", "cancelled"
-  speed: number | null;
-}
-
-interface SharedFolderStats {
-  total_size: number;
-  file_count: number;
-}
+import { useActivityData } from "../hooks/useActivityData";
 
 export function ActivityView() {
-  const [activities, setActivities] = useState<Activity[]>([]);
-  const [folderStats, setFolderStats] = useState<SharedFolderStats | null>(null);
-
-  // 데이터 로드
-  useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 5000); // 5초마다 갱신
-    return () => clearInterval(interval);
-  }, []);
-
-  const loadData = async () => {
-    try {
-      const [activityData, statsData] = await Promise.all([
-        invoke<Activity[]>("get_activity_history"),
-        invoke<SharedFolderStats>("get_shared_folder_stats"),
-      ]);
-      setActivities(activityData);
-      setFolderStats(statsData);
-    } catch (error) {
-      console.error("Failed to load activity data:", error);
-    }
-  };
+  const { activities, folderStats } = useActivityData();
 
   // 평균 속도 계산
   const avgSpeed = activities.length > 0

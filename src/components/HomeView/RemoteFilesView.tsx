@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Folder,
   ArrowLeft,
@@ -11,12 +11,12 @@ import {
   Download,
   FolderOpen,
 } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { listen } from "@tauri-apps/api/event";
 import { useP2pContext } from "../../contexts/P2pContext";
 import { FileListItem } from "./FileListItem";
 import { FileGridItem } from "./FileGridItem";
 import { useFileSelection } from "./hooks/useFileSelection";
+import { useFileDrop } from "./hooks/useFileDrop";
+import { useRemoteFolder } from "./hooks/useRemoteFolder";
 import { DropConfirmModal } from "../Transfer/DropConfirmModal";
 import { TransferQueuePanel } from "../Transfer/TransferQueuePanel";
 import { useTransferQueue } from "../Transfer/hooks/useTransferQueue";
@@ -30,13 +30,7 @@ interface RemoteFilesViewProps {
 export function RemoteFilesView({ peerId, onBack }: RemoteFilesViewProps) {
   const [displayMode, setDisplayMode] = useState<DisplayMode>("list");
   const [searchQuery, setSearchQuery] = useState("");
-  const [isDragging, setIsDragging] = useState(false);
-  const [droppedFiles, setDroppedFiles] = useState<any[]>([]);
-  const [showDropModal, setShowDropModal] = useState(false);
   const [showQueuePanel, setShowQueuePanel] = useState(false);
-
-  // 전송 큐 훅
-  const transferQueue = useTransferQueue();
 
   const {
     connectedPeers,
@@ -44,10 +38,16 @@ export function RemoteFilesView({ peerId, onBack }: RemoteFilesViewProps) {
     isLoadingFiles,
     isDownloading,
     isUploading,
-    requestFileList,
-    downloadFile,
     uploadFile,
+    cancelTransfer,
   } = useP2pContext();
+
+  // 전송 큐 훅
+  const transferQueue = useTransferQueue(uploadFile, cancelTransfer);
+
+  const { currentPath, openFolder, refreshRoot, downloadFiles, uploadFromPC } = useRemoteFolder(peerId);
+
+  const { isDragging, dragHandlers, droppedFiles, showDropModal, closeDropModal } = useFileDrop();
 
   const {
     selectedFiles,
@@ -60,7 +60,7 @@ export function RemoteFilesView({ peerId, onBack }: RemoteFilesViewProps) {
 
   // 폴더 진입 핸들러
   const handleFolderClick = (folderPath: string) => {
-    requestFileList(peerId, folderPath);
+    openFolder(folderPath);
     setSearchQuery("");
     cancelSelection();
   };
@@ -68,261 +68,23 @@ export function RemoteFilesView({ peerId, onBack }: RemoteFilesViewProps) {
   // 다운로드 핸들러
   const handleDownloadSelected = async () => {
     if (selectedFiles.length === 0) return;
-
-    for (const fileName of selectedFiles) {
-      const file = remoteFiles?.files.find((f) => f.name === fileName);
-      if (file && !file.is_dir) {
-        await downloadFile(peerId, file.path);
-      }
-    }
-
+    await downloadFiles(selectedFiles);
     cancelSelection();
   };
 
-  // 파일 업로드 (전송) 핸들러
-  const handleUploadFromPC = async () => {
-    try {
-      // Tauri 파일 선택 다이얼로그 열기
-      const selected = await open({
-        multiple: true,
-        title: "전송할 파일 선택",
-      });
-
-      if (selected) {
-        // 단일 파일 또는 다중 파일 처리
-        const files = Array.isArray(selected) ? selected : [selected];
-
-        for (const filePath of files) {
-          // 현재 원격 경로로 업로드
-          const remotePath = remoteFiles?.path || "/";
-          await uploadFile(peerId, filePath, remotePath);
-        }
-      }
-    } catch (error) {
-      console.error("파일 선택 실패:", error);
-    }
-  };
-
-  // 드래그 앤 드롭 핸들러
-  const handleDragEnter = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    console.log("🎯 드래그 진입!");
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    console.log("👋 드래그 떠남");
-    // 자식 요소로 이동 시 false로 변경되는 것 방지
-    if (e.currentTarget === e.target) {
-      setIsDragging(false);
-    }
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-
-    const files = Array.from(e.dataTransfer.files);
-    console.log("드롭된 파일 수:", files.length);
-
-    if (files.length === 0) {
-      console.log("파일이 없습니다");
-      return;
-    }
-
-    // 파일 정보 수집 (Tauri에서 File 객체는 path 속성을 가짐)
-    const fileInfos = files.map(f => {
-      const filePath = (f as any).path || "";
-      console.log("파일:", f.name, "경로:", filePath);
-      return {
-        name: f.name,
-        path: filePath,
-        size: f.size,
-        type: f.type,
-      };
-    });
-
-    // 경로가 없는 파일 필터링
-    const validFiles = fileInfos.filter(f => f.path !== "");
-
-    if (validFiles.length === 0) {
-      console.error("유효한 파일 경로가 없습니다");
-      console.warn("❌ 파일 경로를 가져올 수 없습니다. Tauri 환경에서 실행 중인지 확인하세요.");
-      alert("파일 경로를 가져올 수 없습니다. 브라우저 개발자 도구 콘솔을 확인하세요.");
-      return;
-    }
-
-    console.log("유효한 파일:", validFiles);
-    setDroppedFiles(validFiles);
-    setShowDropModal(true);
-  };
-
   // 드롭 확인 후 전송
-  const handleConfirmDrop = async () => {
-    setShowDropModal(false);
-
+  const handleConfirmDrop = () => {
     // 큐에 추가
-    const remotePath = remoteFiles?.path || "/";
     const fileInfos = droppedFiles.map(f => ({
       name: f.name,
       path: f.path,
       size: f.size,
     }));
 
-    transferQueue.addFiles(fileInfos, peerId, remotePath);
+    transferQueue.addFiles(fileInfos, peerId, currentPath);
     setShowQueuePanel(true);
-    setDroppedFiles([]);
-
-    // 자동 전송 시작
-    processQueue();
+    closeDropModal();
   };
-
-  const handleCancelDrop = () => {
-    setShowDropModal(false);
-    setDroppedFiles([]);
-  };
-
-  // 큐 처리
-  const processQueue = async () => {
-    const { queue, stats } = transferQueue;
-
-    // 동시 전송 수 제한 확인
-    if (!stats.canStartMore) return;
-
-    // 대기 중인 파일 찾기
-    const waiting = queue.find(q => q.status === "waiting");
-    if (!waiting) return;
-
-    // 전송 시작
-    transferQueue.startTransfer(waiting.id);
-
-    try {
-      await uploadFile(waiting.peerId, waiting.filePath, waiting.remotePath);
-      transferQueue.completeTransfer(waiting.id);
-    } catch (error) {
-      transferQueue.failTransfer(waiting.id, String(error));
-    }
-
-    // 다음 파일 처리
-    setTimeout(() => processQueue(), 100);
-  };
-
-  // Tauri 파일 드롭 이벤트 리스너
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-
-    const setupFileDropListener = async () => {
-      const { listen: tauriListen } = await import("@tauri-apps/api/event");
-      const { stat } = await import("@tauri-apps/plugin-fs");
-
-      // 올바른 이벤트 이름: tauri://drag-drop
-      unlisten = await tauriListen<string[]>("tauri://drag-drop", async (event) => {
-        console.log("📦 Tauri 파일 드롭 감지!", event.payload);
-        const filePaths = event.payload;
-
-        if (filePaths.length === 0) {
-          console.log("파일이 없습니다");
-          return;
-        }
-
-        // 파일 정보 수집 (크기 포함)
-        const fileInfos = await Promise.all(
-          filePaths.map(async (path) => {
-            const fileName = path.split("/").pop() || path.split("\\").pop() || "unknown";
-            try {
-              const metadata = await stat(path);
-              return {
-                name: fileName,
-                path: path,
-                size: metadata.size,
-                type: "",
-              };
-            } catch (e) {
-              console.error("파일 메타데이터 가져오기 실패:", e);
-              return {
-                name: fileName,
-                path: path,
-                size: 0,
-                type: "",
-              };
-            }
-          })
-        );
-
-        console.log("유효한 파일:", fileInfos);
-        setDroppedFiles(fileInfos);
-        setShowDropModal(true);
-      });
-    };
-
-    setupFileDropListener();
-
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, []);
-
-  // 상대방 디렉토리 변경 시 자동 갱신
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    const currentPath = remoteFiles?.path || "/";
-
-    const setup = async () => {
-      unlisten = await listen<string>("remote-directory-changed", (event) => {
-        try {
-          const data = JSON.parse(event.payload);
-          if (data.peer_id === peerId) {
-            requestFileList(peerId, currentPath);
-          }
-        } catch (e) {
-          console.error("remote-directory-changed 파싱 실패:", e);
-        }
-      });
-    };
-
-    setup();
-
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, [peerId, remoteFiles?.path, requestFileList]);
-
-  // 진행률 이벤트 리스너
-  useEffect(() => {
-    const unlisteners: Promise<() => void>[] = [];
-
-    unlisteners.push(
-      listen<string>("file-upload-progress", (event) => {
-        try {
-          const data = JSON.parse(event.payload);
-          // 현재 업로드 중인 항목 찾기
-          const uploading = transferQueue.queue.find(
-            q => q.status === "uploading" && q.peerId === data.peer_id
-          );
-          if (uploading) {
-            const progress = Math.round((data.bytes_sent / data.total_size) * 100);
-            const speed = data.speed || 0;
-            transferQueue.updateProgress(uploading.id, progress, speed);
-          }
-        } catch (e) {
-          console.error("진행률 파싱 실패:", e);
-        }
-      })
-    );
-
-    return () => {
-      unlisteners.forEach(p => p.then(fn => fn()));
-    };
-  }, [transferQueue]);
 
   // 필터링된 파일
   const filteredFiles =
@@ -333,10 +95,10 @@ export function RemoteFilesView({ peerId, onBack }: RemoteFilesViewProps) {
   return (
     <div
       className="flex flex-col h-full relative"
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      onDragEnter={dragHandlers.onDragEnter}
+      onDragOver={dragHandlers.onDragOver}
+      onDragLeave={dragHandlers.onDragLeave}
+      onDrop={dragHandlers.onDrop}
     >
       {/* Drop overlay - 전체 화면 오버레이 */}
       {isDragging && (
@@ -377,7 +139,7 @@ export function RemoteFilesView({ peerId, onBack }: RemoteFilesViewProps) {
           </div>
 
           <button
-            onClick={() => requestFileList(peerId, "/")}
+            onClick={refreshRoot}
             disabled={isLoadingFiles}
             className="p-2 rounded-xl hover:bg-muted/50 transition-colors"
           >
@@ -387,7 +149,7 @@ export function RemoteFilesView({ peerId, onBack }: RemoteFilesViewProps) {
           </button>
 
           <button
-            onClick={handleUploadFromPC}
+            onClick={uploadFromPC}
             disabled={isUploading}
             className={`px-3 py-2 rounded-xl text-white font-medium transition-shadow flex items-center gap-2 text-sm ${isUploading
               ? "bg-gray-400 cursor-not-allowed"
@@ -555,7 +317,7 @@ export function RemoteFilesView({ peerId, onBack }: RemoteFilesViewProps) {
         files={droppedFiles}
         peerName={selectedPeer?.deviceName || "상대방"}
         onConfirm={handleConfirmDrop}
-        onCancel={handleCancelDrop}
+        onCancel={closeDropModal}
       />
 
       {/* Transfer Queue Panel */}

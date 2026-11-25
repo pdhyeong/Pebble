@@ -1,9 +1,9 @@
 import { Check } from "lucide-react";
 import { getFileIconByName, getFileColorByName, formatFileSize } from "../../utils/fileUtils";
-import type { FileInfo } from "./types";
+import type { LocalFileInfo } from "../../core/contract";
 
 interface FileGridItemProps {
-  file: FileInfo;
+  file: LocalFileInfo;
   isSelected: boolean;
   onSelect: () => void;
   onFolderClick?: () => void;

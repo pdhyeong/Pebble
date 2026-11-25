@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Folder,
   ArrowLeft,
@@ -8,13 +8,13 @@ import {
   Grid3x3,
   List,
 } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
 import { useP2pContext } from "../../contexts/P2pContext";
 import { FileListItem } from "./FileListItem";
 import { FileGridItem } from "./FileGridItem";
 import { SelectionBar } from "./SelectionBar";
 import { SendModal } from "./SendModal";
 import { useFileSelection } from "./hooks/useFileSelection";
+import { useLocalFolder } from "./hooks/useLocalFolder";
 import type { DisplayMode } from "./types";
 
 interface LocalFilesViewProps {
@@ -25,16 +25,15 @@ export function LocalFilesView({ onBack }: LocalFilesViewProps) {
   const [displayMode, setDisplayMode] = useState<DisplayMode>("list");
   const [searchQuery, setSearchQuery] = useState("");
   const [showSendModal, setShowSendModal] = useState(false);
-  const [currentPath, setCurrentPath] = useState("/");
 
   const {
     connectedPeers,
     localFiles,
     myDeviceName,
     sharedFolderPath,
-    refreshLocalFiles,
-    uploadFile,
   } = useP2pContext();
+
+  const { currentPath, parentPath, openFolder, refresh, sendFiles } = useLocalFolder();
 
   const {
     selectedFiles,
@@ -43,61 +42,25 @@ export function LocalFilesView({ onBack }: LocalFilesViewProps) {
     cancelSelection,
   } = useFileSelection();
 
-  // 파일 와처 이벤트 구독: 백엔드에서 변경 감지 시 자동 새로고침
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-
-    const setupListener = async () => {
-      unlisten = await listen("local-files-changed", () => {
-        // 현재 경로의 파일 목록을 새로 가져옴
-        refreshLocalFiles(currentPath);
-      });
-    };
-
-    setupListener();
-
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, [currentPath, refreshLocalFiles]);
-
   // 폴더 진입 핸들러
   const handleFolderClick = (folderPath: string) => {
-    setCurrentPath(folderPath);
-    refreshLocalFiles(folderPath);
+    openFolder(folderPath);
     setSearchQuery("");
     cancelSelection();
   };
 
   // 뒤로가기 핸들러
   const handleBack = () => {
-    if (currentPath === "/") {
+    if (parentPath === null) {
       onBack();
       return;
     }
-    // 부모 경로 계산
-    const parts = currentPath.split("/").filter((p) => p);
-    parts.pop();
-    const parentPath = parts.length === 0 ? "/" : "/" + parts.join("/");
-    setCurrentPath(parentPath);
-    refreshLocalFiles(parentPath);
-    setSearchQuery("");
-    cancelSelection();
+    handleFolderClick(parentPath);
   };
 
   // 파일 전송 핸들러
   const handleSendToDevice = async (peerId: string) => {
-    // 선택된 파일들의 절대 경로 구성
-    for (const fileName of selectedFiles) {
-      const file = localFiles.find((f) => f.name === fileName);
-      if (file && !file.is_dir) {
-        // 절대 경로 생성: sharedFolderPath + 상대 경로
-        const absolutePath = sharedFolderPath + file.path;
-        // 원격 경로는 "/"로 설정 (상대방의 공유 폴더 루트)
-        await uploadFile(peerId, absolutePath, "/");
-      }
-    }
-
+    await sendFiles(peerId, selectedFiles);
     setShowSendModal(false);
     cancelSelection();
   };
@@ -139,7 +102,7 @@ export function LocalFilesView({ onBack }: LocalFilesViewProps) {
           </div>
 
           <button
-            onClick={() => refreshLocalFiles(currentPath)}
+            onClick={refresh}
             className="p-2 rounded-xl hover:bg-muted/50 transition-colors"
           >
             <RefreshCw className="w-5 h-5" />

@@ -1,0 +1,115 @@
+use async_trait::async_trait;
+use std::path::PathBuf;
+use tokio::fs;
+
+use crate::application::ports::TrustStore;
+use crate::domain::error::{AppError, AppResult};
+use crate::domain::peer::PeerId;
+
+pub struct JsonTrustStore {
+    path: PathBuf,
+}
+
+impl JsonTrustStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+#[async_trait]
+impl TrustStore for JsonTrustStore {
+    async fn load(&self) -> AppResult<Vec<PeerId>> {
+        let bytes = match fs::read(&self.path).await {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(AppError::io("믿는 기기 목록을 읽지 못했습니다", &e)),
+        };
+        let raw: Vec<String> = serde_json::from_slice(&bytes).map_err(|e| {
+            AppError::new(
+                crate::domain::error::ErrorCode::Internal,
+                format!("믿는 기기 목록이 손상되었습니다: {e}"),
+            )
+        })?;
+        Ok(raw.iter().filter_map(|id| PeerId::parse(id).ok()).collect())
+    }
+
+    async fn save(&self, peers: &[PeerId]) -> AppResult<()> {
+        if let Some(dir) = self.path.parent() {
+            fs::create_dir_all(dir)
+                .await
+                .map_err(|e| AppError::io("설정 폴더를 만들지 못했습니다", &e))?;
+        }
+        let raw: Vec<&str> = peers.iter().map(PeerId::as_str).collect();
+        let bytes = serde_json::to_vec_pretty(&raw)
+            .map_err(|e| AppError::new(crate::domain::error::ErrorCode::Internal, e.to_string()))?;
+        let temp = self
+            .path
+            .with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4().simple()));
+        fs::write(&temp, bytes)
+            .await
+            .map_err(|e| AppError::io("믿는 기기 목록을 저장하지 못했습니다", &e))?;
+        let renamed = fs::rename(&temp, &self.path).await;
+        if renamed.is_err() {
+            let _ = fs::remove_file(&temp).await;
+        }
+        renamed.map_err(|e| AppError::io("믿는 기기 목록을 저장하지 못했습니다", &e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn saved_peers_survive_reload_and_missing_file_is_empty() {
+        let dir = std::env::temp_dir().join(format!("pebble-trust-{}", uuid::Uuid::new_v4()));
+        let store = JsonTrustStore::new(dir.join("nested/trusted.json"));
+        assert!(store.load().await.unwrap().is_empty());
+        let peers = vec![
+            PeerId::parse("12D3KooWA").unwrap(),
+            PeerId::parse("12D3KooWB").unwrap(),
+        ];
+        store.save(&peers).await.unwrap();
+        assert_eq!(store.load().await.unwrap(), peers);
+    }
+}
+
+#[cfg(test)]
+mod mutants_d {
+    use super::*;
+
+    #[tokio::test]
+    async fn unreadable_list_is_an_error_not_an_empty_list() {
+        let dir = std::env::temp_dir().join(format!("pebble-trust-dir-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = JsonTrustStore::new(dir.clone());
+        assert!(store.load().await.is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod unpair_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ac_d4_3_saving_a_shorter_list_drops_the_removed_peer_and_leaves_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("pebble-trust-un-{}", uuid::Uuid::new_v4()));
+        let store = JsonTrustStore::new(dir.join("trusted.json"));
+        let a = PeerId::parse("12D3KooWA").unwrap();
+        let b = PeerId::parse("12D3KooWB").unwrap();
+        store.save(&[a.clone(), b.clone()]).await.unwrap();
+        store.save(std::slice::from_ref(&b)).await.unwrap();
+        assert_eq!(store.load().await.unwrap(), vec![b]);
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "임시 파일이 남음: {leftovers:?}");
+        let raw = std::fs::read_to_string(dir.join("trusted.json")).unwrap();
+        assert!(!raw.contains(a.as_str()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
