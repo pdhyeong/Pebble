@@ -1,9 +1,9 @@
 import { Check, ArrowLeft } from "lucide-react";
 import { getFileIconByName, getFileColorByName, formatFileSize } from "../../utils/fileUtils";
-import type { FileInfo } from "./types";
+import type { LocalFileInfo } from "../../core/contract";
 
 interface FileListItemProps {
-  file: FileInfo;
+  file: LocalFileInfo;
   isSelected: boolean;
   showCheckbox: boolean;
   onSelect: () => void;

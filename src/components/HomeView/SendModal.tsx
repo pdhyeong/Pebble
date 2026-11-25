@@ -1,5 +1,5 @@
 import { Monitor, Send } from "lucide-react";
-import type { ConnectedPeer } from "../../contexts/P2pContext";
+import type { ConnectedPeer } from "../../core/p2pState";
 
 interface SendModalProps {
   isOpen: boolean;

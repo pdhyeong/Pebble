@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { FolderOpen, User, Folder, ArrowRight } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { type AppSettings } from "../hooks/useSettingsStore";
+import { pickFolder } from "../adapters/tauri/localFiles";
+import { describeError } from "../adapters/tauri/errors";
+import { type AppSettings } from "../core/settings";
 
 interface InitialSetupProps {
   onComplete: (settings: AppSettings) => void;
@@ -14,12 +15,8 @@ export function InitialSetup({ onComplete }: InitialSetupProps) {
 
   const handleSelectFolder = async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: "공유 폴더 선택",
-      });
-      if (selected && typeof selected === "string") {
+      const selected = await pickFolder();
+      if (selected) {
         setFolderPath(selected);
         
         // 간단한 초기 폴더 이름 세팅
@@ -30,7 +27,7 @@ export function InitialSetup({ onComplete }: InitialSetupProps) {
         }
       }
     } catch (e) {
-      console.error("폴더 선택 실패:", e);
+      console.error("폴더 선택 실패:", describeError(e));
     }
   };
 

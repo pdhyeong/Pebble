@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Monitor, Plus, Radio } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
 import { useP2pContext } from "../../contexts/P2pContext";
+import { useLocalIp } from "../../hooks/useLocalIp";
 import { DeviceCard, type Device } from "./DeviceCard";
 import { P2PTestPanel } from "./P2PTestPanel";
 import { PairDeviceModal } from "./PairDeviceModal";
@@ -40,7 +40,6 @@ const mockDevices: Device[] = [
 export function DevicesView() {
   const [showPairModal, setShowPairModal] = useState(false);
   const [showTestPanel, setShowTestPanel] = useState(false);
-  const [localIp, setLocalIp] = useState<string>("로딩 중...");
 
   const {
     isP2pRunning,
@@ -55,19 +54,7 @@ export function DevicesView() {
     clearAll,
   } = useP2pContext();
 
-  // 로컬 IP 주소 가져오기
-  useEffect(() => {
-    async function fetchLocalIp() {
-      try {
-        const ip = await invoke<string>("get_local_ip");
-        setLocalIp(ip);
-      } catch (e) {
-        console.error("IP 조회 실패:", e);
-        setLocalIp("알 수 없음");
-      }
-    }
-    fetchLocalIp();
-  }, []);
+  const localIp = useLocalIp();
 
   const devices = mockDevices;
   const onlineCount = devices.filter((d) => d.status === "online").length;

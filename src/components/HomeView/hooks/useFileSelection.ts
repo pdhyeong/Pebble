@@ -5,7 +5,6 @@ export interface UseFileSelectionReturn {
   isSelectionMode: boolean;
   toggleSelection: (fileName: string, isDir: boolean) => void;
   cancelSelection: () => void;
-  clearSelection: () => void;
 }
 
 export function useFileSelection(): UseFileSelectionReturn {
@@ -46,6 +45,5 @@ export function useFileSelection(): UseFileSelectionReturn {
     isSelectionMode,
     toggleSelection,
     cancelSelection,
-    clearSelection: cancelSelection,
   };
 }
