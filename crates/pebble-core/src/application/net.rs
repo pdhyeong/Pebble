@@ -72,18 +72,49 @@ pub struct PairingReply {
 
 #[derive(Debug)]
 pub enum NetCommand {
-    Dial { address: String },
-    Probe { address: String },
-    RequestFileList { peer: PeerId, path: String },
-    RespondFileList { inbound: InboundId, reply: FileListReply },
-    SendStream { peer: PeerId, msg: StreamMsg },
-    RespondStream { inbound: InboundId, ack: StreamAck },
-    RequestPairing { peer: PeerId, ask: PairingAsk },
-    RespondPairing { inbound: InboundId, reply: PairingReply },
-    RequestDeviceInfo { peer: PeerId },
-    RespondDeviceInfo { inbound: InboundId, device_name: String },
-    NotifyDirectoryChanged { peers: Vec<PeerId> },
-    RespondDirectoryChanged { inbound: InboundId },
+    Dial {
+        address: String,
+    },
+    Probe {
+        address: String,
+    },
+    RequestFileList {
+        peer: PeerId,
+        path: String,
+    },
+    RespondFileList {
+        inbound: InboundId,
+        reply: FileListReply,
+    },
+    SendStream {
+        peer: PeerId,
+        msg: StreamMsg,
+    },
+    RespondStream {
+        inbound: InboundId,
+        ack: StreamAck,
+    },
+    RequestPairing {
+        peer: PeerId,
+        ask: PairingAsk,
+    },
+    RespondPairing {
+        inbound: InboundId,
+        reply: PairingReply,
+    },
+    RequestDeviceInfo {
+        peer: PeerId,
+    },
+    RespondDeviceInfo {
+        inbound: InboundId,
+        device_name: String,
+    },
+    NotifyDirectoryChanged {
+        peers: Vec<PeerId>,
+    },
+    RespondDirectoryChanged {
+        inbound: InboundId,
+    },
     Shutdown,
 }
 
@@ -107,20 +138,58 @@ pub enum RequestKind {
 
 #[derive(Debug)]
 pub enum NetEvent {
-    ListeningOn { address: String },
-    PeerDiscovered { peer: PeerId, address: String },
-    PeerExpired { peer: PeerId },
-    Identified { peer: PeerId, agent_version: String },
-    Pinged { peer: PeerId, rtt: Duration },
-    DialStarted { address: String },
-    DialFailed { address: String, error: String },
-    Connected { peer: PeerId },
-    Disconnected { peer: PeerId },
-    Inbound { peer: PeerId, id: InboundId, request: InboundRequest },
-    FileListReplied { peer: PeerId, reply: FileListReply },
-    StreamAcked { peer: PeerId, ack: StreamAck },
-    PairingReplied { peer: PeerId, reply: PairingReply },
-    DeviceInfoReplied { peer: PeerId, device_name: String },
+    ListeningOn {
+        address: String,
+    },
+    PeerDiscovered {
+        peer: PeerId,
+        address: String,
+    },
+    PeerExpired {
+        peer: PeerId,
+    },
+    Identified {
+        peer: PeerId,
+        agent_version: String,
+    },
+    Pinged {
+        peer: PeerId,
+        rtt: Duration,
+    },
+    DialStarted {
+        address: String,
+    },
+    DialFailed {
+        address: String,
+        error: String,
+    },
+    Connected {
+        peer: PeerId,
+    },
+    Disconnected {
+        peer: PeerId,
+    },
+    Inbound {
+        peer: PeerId,
+        id: InboundId,
+        request: InboundRequest,
+    },
+    FileListReplied {
+        peer: PeerId,
+        reply: FileListReply,
+    },
+    StreamAcked {
+        peer: PeerId,
+        ack: StreamAck,
+    },
+    PairingReplied {
+        peer: PeerId,
+        reply: PairingReply,
+    },
+    DeviceInfoReplied {
+        peer: PeerId,
+        device_name: String,
+    },
     RequestFailed {
         peer: PeerId,
         kind: RequestKind,

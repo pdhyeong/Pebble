@@ -3,9 +3,9 @@ mod codec;
 mod protocol;
 
 use futures::StreamExt;
-use libp2p::request_response::{self, Message, ResponseChannel};
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
+use libp2p::request_response::{self, Message, ResponseChannel};
 use libp2p::swarm::dial_opts::DialOpts;
 use libp2p::swarm::{ConnectionId, SwarmEvent};
 use libp2p::{identify, mdns, noise, ping, tcp, yamux, Multiaddr, Swarm, SwarmBuilder};
@@ -57,15 +57,20 @@ impl Libp2pNetwork {
 
 fn load_or_create_identity(path: &Path) -> AppResult<Keypair> {
     if let Ok(bytes) = std::fs::read(path) {
-        return Keypair::from_protobuf_encoding(&bytes)
-            .map_err(|e| AppError::new(ErrorCode::Internal, format!("기기 키 파일이 손상되었습니다 ({}): {e}", path.display())));
+        return Keypair::from_protobuf_encoding(&bytes).map_err(|e| {
+            AppError::new(
+                ErrorCode::Internal,
+                format!("기기 키 파일이 손상되었습니다 ({}): {e}", path.display()),
+            )
+        });
     }
     let identity = Keypair::generate_ed25519();
     let bytes = identity
         .to_protobuf_encoding()
         .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| AppError::io("설정 폴더를 만들지 못했습니다", &e))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| AppError::io("설정 폴더를 만들지 못했습니다", &e))?;
     }
     write_private(path, &bytes).map_err(|e| AppError::io("기기 키를 저장하지 못했습니다", &e))?;
     Ok(identity)
@@ -119,7 +124,11 @@ impl NetworkFactory for Libp2pNetwork {
 fn build_swarm(identity: Keypair, port: u16) -> Result<Swarm<PebbleBehaviour>, Box<dyn Error>> {
     let mut swarm = SwarmBuilder::with_existing_identity(identity)
         .with_tokio()
-        .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
+        .with_tcp(
+            tcp::Config::default(),
+            noise::Config::new,
+            yamux::Config::default,
+        )?
         .with_quic()
         .with_behaviour(behaviour::new_behaviour)?
         .with_swarm_config(|c| c.with_idle_connection_timeout(IDLE_CONNECTION_TIMEOUT))
@@ -195,7 +204,11 @@ impl NetworkActor {
             }
             NetCommand::RespondFileList { inbound, reply } => {
                 if let Some(PendingResponse::FileList(ch)) = self.take_inbound(inbound) {
-                    let _ = self.swarm.behaviour_mut().file_list.send_response(ch, reply.into());
+                    let _ = self
+                        .swarm
+                        .behaviour_mut()
+                        .file_list
+                        .send_response(ch, reply.into());
                 }
             }
             NetCommand::SendStream { peer, msg } => {
@@ -208,23 +221,38 @@ impl NetworkActor {
                     if is_init {
                         self.prefer_quic(p);
                     }
-                    let request_id = self.swarm.behaviour_mut().stream.send_request(&p, msg.into());
+                    let request_id = self
+                        .swarm
+                        .behaviour_mut()
+                        .stream
+                        .send_request(&p, msg.into());
                     self.stream_requests.insert(request_id, transfer_id);
                 }
             }
             NetCommand::RespondStream { inbound, ack } => {
                 if let Some(PendingResponse::Stream(ch)) = self.take_inbound(inbound) {
-                    let _ = self.swarm.behaviour_mut().stream.send_response(ch, ack.into());
+                    let _ = self
+                        .swarm
+                        .behaviour_mut()
+                        .stream
+                        .send_response(ch, ack.into());
                 }
             }
             NetCommand::RequestPairing { peer, ask } => {
                 if let Some(p) = self.resolve(&peer, RequestKind::Pairing, None).await {
-                    self.swarm.behaviour_mut().pairing.send_request(&p, ask.into());
+                    self.swarm
+                        .behaviour_mut()
+                        .pairing
+                        .send_request(&p, ask.into());
                 }
             }
             NetCommand::RespondPairing { inbound, reply } => {
                 if let Some(PendingResponse::Pairing(ch)) = self.take_inbound(inbound) {
-                    let _ = self.swarm.behaviour_mut().pairing.send_response(ch, reply.into());
+                    let _ = self
+                        .swarm
+                        .behaviour_mut()
+                        .pairing
+                        .send_response(ch, reply.into());
                 }
             }
             NetCommand::RequestDeviceInfo { peer } => {
@@ -235,7 +263,10 @@ impl NetworkActor {
                         .send_request(&p, DeviceInfoRequestDto {});
                 }
             }
-            NetCommand::RespondDeviceInfo { inbound, device_name } => {
+            NetCommand::RespondDeviceInfo {
+                inbound,
+                device_name,
+            } => {
                 if let Some(PendingResponse::DeviceInfo(ch)) = self.take_inbound(inbound) {
                     let _ = self
                         .swarm
@@ -246,7 +277,10 @@ impl NetworkActor {
             }
             NetCommand::NotifyDirectoryChanged { peers } => {
                 for peer in peers {
-                    if let Some(p) = self.resolve(&peer, RequestKind::DirectoryChanged, None).await {
+                    if let Some(p) = self
+                        .resolve(&peer, RequestKind::DirectoryChanged, None)
+                        .await
+                    {
                         self.swarm
                             .behaviour_mut()
                             .directory_changed
@@ -287,7 +321,11 @@ impl NetworkActor {
         let Some(ip) = ip_of(&addr) else {
             return;
         };
-        let busy = self.connections.values().chain(self.probes.values()).any(|known| *known == ip);
+        let busy = self
+            .connections
+            .values()
+            .chain(self.probes.values())
+            .any(|known| *known == ip);
         if busy {
             return;
         }
@@ -298,7 +336,12 @@ impl NetworkActor {
         }
     }
 
-    async fn resolve(&mut self, peer: &PeerId, kind: RequestKind, transfer_id: Option<TransferId>) -> Option<libp2p::PeerId> {
+    async fn resolve(
+        &mut self,
+        peer: &PeerId,
+        kind: RequestKind,
+        transfer_id: Option<TransferId>,
+    ) -> Option<libp2p::PeerId> {
         match peer.as_str().parse::<libp2p::PeerId>() {
             Ok(p) => Some(p),
             Err(e) => {
@@ -449,10 +492,16 @@ impl NetworkActor {
                 true
             }
             mdns::Event::Expired(list) => {
-                let expired: HashSet<libp2p::PeerId> = list.into_iter().map(|(peer, _)| peer).collect();
+                let expired: HashSet<libp2p::PeerId> =
+                    list.into_iter().map(|(peer, _)| peer).collect();
                 for peer in expired {
                     self.quic_addresses.remove(&peer);
-                    if !self.emit(NetEvent::PeerExpired { peer: domain_peer(&peer) }).await {
+                    if !self
+                        .emit(NetEvent::PeerExpired {
+                            peer: domain_peer(&peer),
+                        })
+                        .await
+                    {
                         return false;
                     }
                 }
@@ -461,11 +510,17 @@ impl NetworkActor {
         }
     }
 
-    fn on_file_list(&mut self, event: request_response::Event<FileListRequestDto, FileListResponseDto>) -> Option<NetEvent> {
+    fn on_file_list(
+        &mut self,
+        event: request_response::Event<FileListRequestDto, FileListResponseDto>,
+    ) -> Option<NetEvent> {
         match event {
             request_response::Event::Message {
                 peer,
-                message: Message::Request { request, channel, .. },
+                message:
+                    Message::Request {
+                        request, channel, ..
+                    },
             } => Some(NetEvent::Inbound {
                 peer: domain_peer(&peer),
                 id: self.store_inbound(peer, PendingResponse::FileList(channel)),
@@ -478,16 +533,24 @@ impl NetworkActor {
                 peer: domain_peer(&peer),
                 reply: response.into(),
             }),
-            request_response::Event::OutboundFailure { peer, error, .. } => Some(failure(peer, RequestKind::FileList, None, &error)),
+            request_response::Event::OutboundFailure { peer, error, .. } => {
+                Some(failure(peer, RequestKind::FileList, None, &error))
+            }
             _ => None,
         }
     }
 
-    fn on_stream(&mut self, event: request_response::Event<protocol::StreamRequestDto, StreamResponseDto>) -> Option<NetEvent> {
+    fn on_stream(
+        &mut self,
+        event: request_response::Event<protocol::StreamRequestDto, StreamResponseDto>,
+    ) -> Option<NetEvent> {
         match event {
             request_response::Event::Message {
                 peer,
-                message: Message::Request { request, channel, .. },
+                message:
+                    Message::Request {
+                        request, channel, ..
+                    },
             } => Some(NetEvent::Inbound {
                 peer: domain_peer(&peer),
                 id: self.store_inbound(peer, PendingResponse::Stream(channel)),
@@ -495,7 +558,11 @@ impl NetworkActor {
             }),
             request_response::Event::Message {
                 peer,
-                message: Message::Response { request_id, response },
+                message:
+                    Message::Response {
+                        request_id,
+                        response,
+                    },
             } => {
                 self.stream_requests.remove(&request_id);
                 Some(NetEvent::StreamAcked {
@@ -515,7 +582,10 @@ impl NetworkActor {
         }
     }
 
-    fn on_device_info(&mut self, event: request_response::Event<DeviceInfoRequestDto, DeviceInfoResponseDto>) -> Option<NetEvent> {
+    fn on_device_info(
+        &mut self,
+        event: request_response::Event<DeviceInfoRequestDto, DeviceInfoResponseDto>,
+    ) -> Option<NetEvent> {
         match event {
             request_response::Event::Message {
                 peer,
@@ -532,16 +602,24 @@ impl NetworkActor {
                 peer: domain_peer(&peer),
                 device_name: response.device_name,
             }),
-            request_response::Event::OutboundFailure { peer, error, .. } => Some(failure(peer, RequestKind::DeviceInfo, None, &error)),
+            request_response::Event::OutboundFailure { peer, error, .. } => {
+                Some(failure(peer, RequestKind::DeviceInfo, None, &error))
+            }
             _ => None,
         }
     }
 
-    fn on_pairing(&mut self, event: request_response::Event<protocol::PairingRequestDto, PairingResponseDto>) -> Option<NetEvent> {
+    fn on_pairing(
+        &mut self,
+        event: request_response::Event<protocol::PairingRequestDto, PairingResponseDto>,
+    ) -> Option<NetEvent> {
         match event {
             request_response::Event::Message {
                 peer,
-                message: Message::Request { request, channel, .. },
+                message:
+                    Message::Request {
+                        request, channel, ..
+                    },
             } => Some(NetEvent::Inbound {
                 peer: domain_peer(&peer),
                 id: self.store_inbound(peer, PendingResponse::Pairing(channel)),
@@ -554,12 +632,17 @@ impl NetworkActor {
                 peer: domain_peer(&peer),
                 reply: response.into(),
             }),
-            request_response::Event::OutboundFailure { peer, error, .. } => Some(failure(peer, RequestKind::Pairing, None, &error)),
+            request_response::Event::OutboundFailure { peer, error, .. } => {
+                Some(failure(peer, RequestKind::Pairing, None, &error))
+            }
             _ => None,
         }
     }
 
-    fn on_directory_changed(&mut self, event: request_response::Event<DirectoryChangedDto, DirectoryChangedDto>) -> Option<NetEvent> {
+    fn on_directory_changed(
+        &mut self,
+        event: request_response::Event<DirectoryChangedDto, DirectoryChangedDto>,
+    ) -> Option<NetEvent> {
         match event {
             request_response::Event::Message {
                 peer,

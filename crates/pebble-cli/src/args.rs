@@ -55,7 +55,9 @@ pub fn parse(raw: Vec<String>) -> Result<Cli, String> {
             "--json" => json = true,
             "--no-tailscale" => flags.push(arg),
             "--config-dir" | "--name" | "--shared" | "--downloads" | "--port" => {
-                let value = iter.next().ok_or_else(|| format!("{arg} 뒤에 값이 필요합니다"))?;
+                let value = iter
+                    .next()
+                    .ok_or_else(|| format!("{arg} 뒤에 값이 필요합니다"))?;
                 if arg == "--config-dir" {
                     config_dir = Some(PathBuf::from(value));
                 } else {
@@ -74,20 +76,40 @@ pub fn parse(raw: Vec<String>) -> Result<Cli, String> {
     })
 }
 
-fn command(words: &[String], options: &[(String, String)], flags: &[String]) -> Result<Command, String> {
+fn command(
+    words: &[String],
+    options: &[(String, String)],
+    flags: &[String],
+) -> Result<Command, String> {
     let (name, rest) = words.split_first().ok_or("명령이 없습니다")?;
     if name != "daemon" && (!options.is_empty() || !flags.is_empty()) {
-        return Err("--name·--shared·--downloads·--port·--no-tailscale 는 daemon 에서만 씁니다".into());
+        return Err(
+            "--name·--shared·--downloads·--port·--no-tailscale 는 daemon 에서만 씁니다".into(),
+        );
     }
-    let arg = |i: usize, what: &str| rest.get(i).cloned().ok_or(format!("{name}: {what} 이(가) 필요합니다"));
+    let arg = |i: usize, what: &str| {
+        rest.get(i)
+            .cloned()
+            .ok_or(format!("{name}: {what} 이(가) 필요합니다"))
+    };
     let request = match (name.as_str(), rest.len()) {
         ("daemon", 0) => return daemon(options, flags).map(Command::Daemon),
         ("status", 0) => ControlRequest::Status,
         ("peers", 0) => ControlRequest::Peers,
-        ("connect", 1) => ControlRequest::Connect { address: arg(0, "주소")? },
-        ("pair", 1) => ControlRequest::Pair { peer: arg(0, "기기")? },
-        ("accept", 1) => ControlRequest::Respond { peer: arg(0, "기기")?, approve: true },
-        ("reject", 1) => ControlRequest::Respond { peer: arg(0, "기기")?, approve: false },
+        ("connect", 1) => ControlRequest::Connect {
+            address: arg(0, "주소")?,
+        },
+        ("pair", 1) => ControlRequest::Pair {
+            peer: arg(0, "기기")?,
+        },
+        ("accept", 1) => ControlRequest::Respond {
+            peer: arg(0, "기기")?,
+            approve: true,
+        },
+        ("reject", 1) => ControlRequest::Respond {
+            peer: arg(0, "기기")?,
+            approve: false,
+        },
         ("ls", 1 | 2) => ControlRequest::Ls {
             peer: arg(0, "기기")?,
             path: rest.get(1).cloned().unwrap_or_else(|| "/".into()),
@@ -97,17 +119,34 @@ fn command(words: &[String], options: &[(String, String)], flags: &[String]) -> 
             peer: arg(1, "기기")?,
             dir: rest.get(2).cloned().unwrap_or_else(|| "/".into()),
         },
-        ("get", 2) => ControlRequest::Get { peer: arg(0, "기기")?, path: arg(1, "경로")? },
-        ("cancel", 1) => ControlRequest::Cancel { transfer: arg(0, "전송ID")? },
-        _ => return Err(format!("명령 '{name}' 의 인자 수가 맞지 않거나 모르는 명령입니다")),
+        ("get", 2) => ControlRequest::Get {
+            peer: arg(0, "기기")?,
+            path: arg(1, "경로")?,
+        },
+        ("cancel", 1) => ControlRequest::Cancel {
+            transfer: arg(0, "전송ID")?,
+        },
+        _ => {
+            return Err(format!(
+                "명령 '{name}' 의 인자 수가 맞지 않거나 모르는 명령입니다"
+            ))
+        }
     };
     Ok(Command::Request(request))
 }
 
 fn daemon(options: &[(String, String)], flags: &[String]) -> Result<DaemonOptions, String> {
-    let get = |key: &str| options.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+    let get = |key: &str| {
+        options
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    };
     let port = get("--port")
-        .map(|p| p.parse::<u16>().map_err(|_| format!("포트 번호가 올바르지 않습니다: {p}")))
+        .map(|p| {
+            p.parse::<u16>()
+                .map_err(|_| format!("포트 번호가 올바르지 않습니다: {p}"))
+        })
         .transpose()?;
     Ok(DaemonOptions {
         name: get("--name"),
@@ -138,15 +177,25 @@ mod tests {
     fn parses_client_commands_with_defaults() {
         let cli = parse(args("ls done --json")).unwrap();
         assert!(cli.json);
-        assert!(matches!(cli.command, Command::Request(ControlRequest::Ls { ref peer, ref path }) if peer == "done" && path == "/"));
+        assert!(
+            matches!(cli.command, Command::Request(ControlRequest::Ls { ref peer, ref path }) if peer == "done" && path == "/")
+        );
         let cli = parse(args("accept office")).unwrap();
-        assert!(matches!(cli.command, Command::Request(ControlRequest::Respond { approve: true, .. })));
+        assert!(matches!(
+            cli.command,
+            Command::Request(ControlRequest::Respond { approve: true, .. })
+        ));
     }
 
     #[test]
     fn parses_daemon_options() {
-        let cli = parse(args("daemon --name linux --port 4000 --no-tailscale --config-dir /tmp/p")).unwrap();
-        let Command::Daemon(opts) = cli.command else { panic!("daemon 이어야 합니다") };
+        let cli = parse(args(
+            "daemon --name linux --port 4000 --no-tailscale --config-dir /tmp/p",
+        ))
+        .unwrap();
+        let Command::Daemon(opts) = cli.command else {
+            panic!("daemon 이어야 합니다")
+        };
         assert_eq!(opts.name.as_deref(), Some("linux"));
         assert_eq!(opts.port, Some(4000));
         assert!(!opts.tailscale);

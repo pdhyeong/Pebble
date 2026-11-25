@@ -9,7 +9,7 @@ import PairingModal from "./components/PairingModal";
 import { TransferProgressBar } from "./components/Transfer/TransferProgressBar";
 import { InitialSetup } from "./components/InitialSetup";
 import { useAppSetup } from "./hooks/useAppSetup";
-import { saveSettings } from "./adapters/tauri/settingsStore";
+import { saveSettingsOrAlert } from "./adapters/tauri/settingsStore";
 
 import { SharedFolderModal } from "./components/SharedFolderModal";
 
@@ -35,7 +35,7 @@ function AppContent() {
     await setSharedFolderDisplayName(newDisplayName);
 
     // 2. 영구 저장소에 저장 (다음 앱 시작 시 유지되도록)
-    await saveSettings({
+    await saveSettingsOrAlert({
       deviceName: newDeviceName,
       sharedFolderPath: newPath,
       sharedFolderDisplayName: newDisplayName,

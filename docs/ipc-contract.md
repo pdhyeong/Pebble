@@ -25,11 +25,11 @@ interface AppError { code: ErrorCode; message: string; }
 | `get_p2p_status` | — | `boolean` | |
 | `connect_to_peer` | `addr: string` | `null` | multiaddr |
 | `request_file_list` | `peerId, path` | `null` | 결과는 `remote-files` 이벤트 |
-| `download_file` | `peerId, path` | `string` (transfer_id) | 받은 파일은 OS 다운로드 폴더에 저장 |
-| `upload_file` | `peerId, filePath, remotePath` | `string` (transfer_id) | `filePath` 는 내 기기의 절대 경로, `remotePath` 는 상대 공유 폴더 안 상대 경로 |
+| `download_file` | `peerId, path` | `string` (transfer_id) | 받은 파일은 OS 다운로드 폴더에 저장. 페어링 안 된 기기면 `ACCESS_DENIED` |
+| `upload_file` | `peerId, filePath, remotePath` | `string` (transfer_id) | `filePath` 는 내 기기의 절대 경로, `remotePath` 는 상대 공유 폴더 안 상대 경로. 페어링 안 된 기기면 `ACCESS_DENIED` |
 | `cancel_transfer` | `transferId` | `null` | |
 | `request_pairing` | `peerId` | `string` (PIN 6자리) | `pairing-sent` 이벤트도 온다 |
-| `respond_pairing` | `peerId, approved: boolean` | `null` | |
+| `respond_pairing` | `peerId, approved: boolean` | `null` | 요청을 받은 지 170초가 지났으면 `NOT_FOUND`. 믿는 기기 목록을 저장하지 못하면 `IO` 이고 상대에게는 거절이 간다 |
 | `set_device_name` / `get_device_name` | `name` / — | `null` / `string` | |
 | `set_shared_folder` / `get_shared_folder` | `path` / — | `null` / `string` | 설정하면 폴더를 만들고 **파일 감시도 다시 시작**한다 |
 | `set_shared_folder_display_name` / `get_shared_folder_display_name` | `name` / — | `null` / `string` | |
@@ -114,4 +114,6 @@ type Direction = "upload" | "download";
 - 스트림 `Init` 에는 `for_pull`(다운로드 요청에 대한 응답인지)이 들어 있다. 요청하지 않았거나 이미 취소한 다운로드의 `Init` 은 거절한다.
 - 조각 크기는 마지막 조각을 빼고 정확히 1 MiB 여야 한다. 크기가 다르면 그 전송은 실패한다.
 - 기본 포트는 TCP·UDP 47123 이다. 기기 키는 설정 폴더 `identity.key` 에 남아서 PeerId 가 바뀌지 않는다. 페어링은 `trusted-peers.json` 에 남는다.
+- `trusted-peers.json` 을 읽지 못하면(손상·권한) 그 파일을 덮어쓰지 않도록 새 페어링 저장을 막는다. 파일을 고치거나 지우고 다시 시작한다.
+- 상대가 보낸 기기 이름은 64자까지만 쓴다.
 - CLI 연결 통로는 `docs/cli.md` 를 본다.

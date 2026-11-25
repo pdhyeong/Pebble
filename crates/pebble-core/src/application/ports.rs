@@ -25,7 +25,10 @@ pub struct OpenedFile {
 }
 
 pub enum IncomingTarget<'a> {
-    Shared { root: &'a Path, dir: &'a RelativePath },
+    Shared {
+        root: &'a Path,
+        dir: &'a RelativePath,
+    },
     Downloads,
 }
 
@@ -85,7 +88,11 @@ impl fmt::Debug for DeviceCredentials {
 pub trait ServerApi: Send + Sync + 'static {
     async fn register(&self, peer: &PeerId, device_name: &str) -> AppResult<DeviceCredentials>;
     async fn heartbeat(&self, creds: &DeviceCredentials) -> AppResult<()>;
-    async fn sync_files(&self, creds: &DeviceCredentials, files: Vec<FileSnapshot>) -> AppResult<()>;
+    async fn sync_files(
+        &self,
+        creds: &DeviceCredentials,
+        files: Vec<FileSnapshot>,
+    ) -> AppResult<()>;
 }
 
 #[async_trait]

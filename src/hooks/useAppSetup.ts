@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { applySettingsToBackend } from "../adapters/tauri/commands";
 import { describeError } from "../adapters/tauri/errors";
-import { loadSettings, saveSettings } from "../adapters/tauri/settingsStore";
+import { loadSettings, saveSettingsOrAlert } from "../adapters/tauri/settingsStore";
 import type { AppSettings } from "../core/settings";
 
 async function pushSettings(settings: AppSettings) {
@@ -29,7 +29,7 @@ export function useAppSetup() {
   }, []);
 
   const completeSetup = useCallback(async (settings: AppSettings) => {
-    await saveSettings(settings);
+    if (!(await saveSettingsOrAlert(settings))) return;
     await pushSettings(settings);
     setNeedsSetup(false);
   }, []);

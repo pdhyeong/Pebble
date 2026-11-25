@@ -18,20 +18,23 @@ use pebble_core::domain::error::AppResult;
 use pebble_core::domain::settings::Settings;
 
 use crate::args::DaemonOptions;
-use crate::log::LogPrinter;
+use crate::log::print_events;
 
 pub async fn run(config: ConfigPaths, options: DaemonOptions) -> AppResult<()> {
     let home = dirs::home_dir();
     let port = options.port.unwrap_or(DEFAULT_PORT);
     let mut initial = Settings::with_home(home.clone());
     initial.device_name = options.name.unwrap_or_else(host_name);
-    let shared = options.shared.unwrap_or_else(|| initial.shared_folder.clone());
+    let shared = options
+        .shared
+        .unwrap_or_else(|| initial.shared_folder.clone());
     let downloads = options
         .downloads
         .or_else(dirs::download_dir)
         .unwrap_or_else(|| home.unwrap_or_else(|| PathBuf::from(".")).join("Downloads"));
 
-    let hub = Arc::new(EventHub::new(Some(Arc::new(LogPrinter))));
+    let hub = Arc::new(EventHub::new(None));
+    let printer = tokio::spawn(print_events(hub.subscribe()));
     let ui: Arc<dyn UiEvents> = hub.clone();
     let files: Arc<dyn FileStore> = Arc::new(LocalFileStore::new(downloads.clone()));
     let settings = SettingsStore::new(initial);
@@ -43,12 +46,17 @@ pub async fn run(config: ConfigPaths, options: DaemonOptions) -> AppResult<()> {
         activity: activity.clone(),
         trust: Arc::new(JsonTrustStore::new(config.trusted_peers())),
     };
-    let network: Arc<dyn NetworkFactory> = Arc::new(Libp2pNetwork::persistent(&config.identity(), port)?);
+    let network: Arc<dyn NetworkFactory> =
+        Arc::new(Libp2pNetwork::persistent(&config.identity(), port)?);
     let directory = options
         .tailscale
         .then(|| Arc::new(TailscaleDirectory::new(port)) as Arc<dyn PeerDirectory>);
     let supervisor = Arc::new(P2pSupervisor::new(engine_deps, network, None, directory));
-    let folder_watch = Arc::new(FolderWatch::spawn(Arc::new(NotifyFolderWatcher), ui.clone(), supervisor.clone()));
+    let folder_watch = Arc::new(FolderWatch::spawn(
+        Arc::new(NotifyFolderWatcher),
+        ui.clone(),
+        supervisor.clone(),
+    ));
     let services = AppServices {
         supervisor,
         folder_watch,
@@ -66,16 +74,27 @@ pub async fn run(config: ConfigPaths, options: DaemonOptions) -> AppResult<()> {
     let peer = services.supervisor.local_peer().await;
     println!("Pebble daemon 시작");
     println!("  이름       {}", services.device_name());
-    println!("  PeerId     {}", peer.map(|p| p.to_string()).unwrap_or_default());
+    println!(
+        "  PeerId     {}",
+        peer.map(|p| p.to_string()).unwrap_or_default()
+    );
     println!("  포트       {port}");
     println!("  공유 폴더  {}", shared.display());
     println!("  받은 파일  {}", downloads.display());
-    println!("  Tailscale  {}", if options.tailscale { "같은 계정 기기 자동 연결" } else { "끔" });
+    println!(
+        "  Tailscale  {}",
+        if options.tailscale {
+            "같은 계정 기기 자동 연결"
+        } else {
+            "끔"
+        }
+    );
 
     wait_for_stop().await;
     server.abort();
     let _ = services.stop_p2p().await;
     let _ = tokio::fs::remove_file(config.control_socket()).await;
+    printer.abort();
     println!("Pebble daemon 종료");
     Ok(())
 }

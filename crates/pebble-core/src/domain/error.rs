@@ -47,15 +47,24 @@ impl AppError {
     }
 
     pub fn already_running() -> Self {
-        Self::new(ErrorCode::P2pAlreadyRunning, "P2P 엔진이 이미 실행 중입니다.")
+        Self::new(
+            ErrorCode::P2pAlreadyRunning,
+            "P2P 엔진이 이미 실행 중입니다.",
+        )
     }
 
     pub fn engine_unavailable() -> Self {
-        Self::new(ErrorCode::EngineUnavailable, "P2P 엔진이 응답하지 않습니다.")
+        Self::new(
+            ErrorCode::EngineUnavailable,
+            "P2P 엔진이 응답하지 않습니다.",
+        )
     }
 
     pub fn access_denied() -> Self {
-        Self::new(ErrorCode::AccessDenied, "공유 폴더 밖에는 접근할 수 없습니다.")
+        Self::new(
+            ErrorCode::AccessDenied,
+            "공유 폴더 밖에는 접근할 수 없습니다.",
+        )
     }
 }
 

@@ -212,7 +212,9 @@ impl From<StreamResponseDto> for StreamAck {
         let result = if d.success {
             Ok(())
         } else {
-            Err(d.error.unwrap_or_else(|| "상대 기기가 전송을 거부했습니다.".to_string()))
+            Err(d
+                .error
+                .unwrap_or_else(|| "상대 기기가 전송을 거부했습니다.".to_string()))
         };
         Self {
             transfer_id: TransferId::from_wire(d.transfer_id),
@@ -283,7 +285,13 @@ mod tests {
             pin: "123456".into(),
         })
         .unwrap();
-        assert_eq!(json, serde_json::json!({"device_name": "a", "pin": "123456"}));
-        assert_eq!(serde_json::to_string(&DeviceInfoRequestDto {}).unwrap(), "{}");
+        assert_eq!(
+            json,
+            serde_json::json!({"device_name": "a", "pin": "123456"})
+        );
+        assert_eq!(
+            serde_json::to_string(&DeviceInfoRequestDto {}).unwrap(),
+            "{}"
+        );
     }
 }

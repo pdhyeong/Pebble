@@ -1,17 +1,17 @@
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
+use crate::adapters::tauri::commands;
+use crate::adapters::tauri::credentials::TauriCredentialStore;
+use crate::adapters::tauri::events::TauriUiEvents;
 use pebble_core::adapters::config::ConfigPaths;
 #[cfg(unix)]
 use pebble_core::adapters::control;
 use pebble_core::adapters::event_hub::EventHub;
 use pebble_core::adapters::fs::{JsonTrustStore, LocalFileStore, NotifyFolderWatcher};
 use pebble_core::adapters::p2p::{Libp2pNetwork, DEFAULT_PORT};
-use pebble_core::adapters::tailscale::TailscaleDirectory;
 use pebble_core::adapters::server::{HttpServerApi, SERVER_BASE_URL};
-use crate::adapters::tauri::commands;
-use crate::adapters::tauri::credentials::TauriCredentialStore;
-use crate::adapters::tauri::events::TauriUiEvents;
+use pebble_core::adapters::tailscale::TailscaleDirectory;
 use pebble_core::application::engine::EngineDeps;
 use pebble_core::application::folder_watch::FolderWatch;
 use pebble_core::application::ports::{FileStore, NetworkFactory, UiEvents};
@@ -72,7 +72,9 @@ fn build_services(app: &AppHandle) -> Result<AppServices, Box<dyn std::error::Er
         .and_then(|p| p.parse().ok())
         .unwrap_or(DEFAULT_PORT);
 
-    let hub = Arc::new(EventHub::new(Some(Arc::new(TauriUiEvents::new(app.clone())))));
+    let hub = Arc::new(EventHub::new(Some(Arc::new(TauriUiEvents::new(
+        app.clone(),
+    )))));
     let ui: Arc<dyn UiEvents> = hub.clone();
     let downloads = dirs::download_dir()
         .or_else(dirs::home_dir)
@@ -82,7 +84,10 @@ fn build_services(app: &AppHandle) -> Result<AppServices, Box<dyn std::error::Er
     let activity = ActivityStore::default();
 
     let server = ServerDeps {
-        api: Arc::new(HttpServerApi::new(SERVER_BASE_URL, env!("REGISTRATION_KEY"))),
+        api: Arc::new(HttpServerApi::new(
+            SERVER_BASE_URL,
+            env!("REGISTRATION_KEY"),
+        )),
         credentials: Arc::new(TauriCredentialStore::new(app.clone())),
         files: files.clone(),
         settings: settings.clone(),
@@ -94,10 +99,20 @@ fn build_services(app: &AppHandle) -> Result<AppServices, Box<dyn std::error::Er
         activity: activity.clone(),
         trust: Arc::new(JsonTrustStore::new(config.trusted_peers())),
     };
-    let network: Arc<dyn NetworkFactory> = Arc::new(Libp2pNetwork::persistent(&config.identity(), port)?);
+    let network: Arc<dyn NetworkFactory> =
+        Arc::new(Libp2pNetwork::persistent(&config.identity(), port)?);
     let directory = Arc::new(TailscaleDirectory::new(port));
-    let supervisor = Arc::new(P2pSupervisor::new(engine_deps, network, Some(server), Some(directory)));
-    let folder_watch = Arc::new(FolderWatch::spawn(Arc::new(NotifyFolderWatcher), ui.clone(), supervisor.clone()));
+    let supervisor = Arc::new(P2pSupervisor::new(
+        engine_deps,
+        network,
+        Some(server),
+        Some(directory),
+    ));
+    let folder_watch = Arc::new(FolderWatch::spawn(
+        Arc::new(NotifyFolderWatcher),
+        ui.clone(),
+        supervisor.clone(),
+    ));
 
     let services = AppServices {
         supervisor,

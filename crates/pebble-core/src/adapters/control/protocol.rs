@@ -9,13 +9,32 @@ use crate::domain::error::AppError;
 pub enum ControlRequest {
     Status,
     Peers,
-    Connect { address: String },
-    Pair { peer: String },
-    Respond { peer: String, approve: bool },
-    Ls { peer: String, path: String },
-    Send { peer: String, file: PathBuf, dir: String },
-    Get { peer: String, path: String },
-    Cancel { transfer: String },
+    Connect {
+        address: String,
+    },
+    Pair {
+        peer: String,
+    },
+    Respond {
+        peer: String,
+        approve: bool,
+    },
+    Ls {
+        peer: String,
+        path: String,
+    },
+    Send {
+        peer: String,
+        file: PathBuf,
+        dir: String,
+    },
+    Get {
+        peer: String,
+        path: String,
+    },
+    Cancel {
+        transfer: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

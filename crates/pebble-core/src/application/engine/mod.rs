@@ -1,11 +1,11 @@
 mod peers;
 mod transfers;
 
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -26,15 +26,42 @@ pub const COMMAND_BUFFER: usize = 64;
 type Reply<T> = oneshot::Sender<AppResult<T>>;
 
 pub enum EngineCommand {
-    Dial { address: String },
-    Probe { address: String },
-    Peers { reply: Reply<Vec<PeerSummary>> },
-    RequestFileList { peer: PeerId, path: String },
-    Download { peer: PeerId, path: RelativePath, reply: Reply<TransferId> },
-    Upload { peer: PeerId, file: PathBuf, remote_dir: RelativePath, reply: Reply<TransferId> },
-    Cancel { transfer_id: TransferId },
-    RequestPairing { peer: PeerId, reply: Reply<Pin> },
-    RespondPairing { peer: PeerId, approved: bool, reply: Reply<()> },
+    Dial {
+        address: String,
+    },
+    Probe {
+        address: String,
+    },
+    Peers {
+        reply: Reply<Vec<PeerSummary>>,
+    },
+    RequestFileList {
+        peer: PeerId,
+        path: String,
+    },
+    Download {
+        peer: PeerId,
+        path: RelativePath,
+        reply: Reply<TransferId>,
+    },
+    Upload {
+        peer: PeerId,
+        file: PathBuf,
+        remote_dir: RelativePath,
+        reply: Reply<TransferId>,
+    },
+    Cancel {
+        transfer_id: TransferId,
+    },
+    RequestPairing {
+        peer: PeerId,
+        reply: Reply<Pin>,
+    },
+    RespondPairing {
+        peer: PeerId,
+        approved: bool,
+        reply: Reply<()>,
+    },
     FolderChanged,
     Shutdown,
 }
@@ -102,6 +129,8 @@ pub fn spawn_engine(
         connected: HashSet::new(),
         device_names: HashMap::new(),
         pending_pairings: HashMap::new(),
+        trust_unreadable: false,
+        early_cancels: VecDeque::new(),
         outgoing: HashMap::new(),
         incoming: HashMap::new(),
         pulls: HashMap::new(),
@@ -110,13 +139,21 @@ pub fn spawn_engine(
     (EngineHandle { commands }, task)
 }
 
+struct PendingPairing {
+    inbound: InboundId,
+    pin: Pin,
+    since: Instant,
+}
+
 struct Engine {
     deps: EngineDeps,
     net: mpsc::UnboundedSender<NetCommand>,
     trusted: HashSet<PeerId>,
     connected: HashSet<PeerId>,
     device_names: HashMap<PeerId, String>,
-    pending_pairings: HashMap<PeerId, (InboundId, Pin)>,
+    pending_pairings: HashMap<PeerId, PendingPairing>,
+    trust_unreadable: bool,
+    early_cancels: VecDeque<(TransferId, PeerId, Instant)>,
     outgoing: HashMap<TransferId, Outgoing>,
     incoming: HashMap<TransferId, Incoming>,
     pulls: HashMap<TransferId, PendingPull>,
@@ -132,7 +169,10 @@ impl Engine {
         let mut sweep = tokio::time::interval(STALL_TIMEOUT / 4);
         let reason = loop {
             tokio::select! {
-                _ = sweep.tick() => self.sweep_stalled().await,
+                _ = sweep.tick() => {
+                    self.sweep_stalled().await;
+                    self.expire_pairings();
+                }
                 command = inbox.recv() => match command {
                     None | Some(EngineCommand::Shutdown) => break "P2P 엔진이 종료되었습니다.",
                     Some(command) => self.on_command(command).await,
@@ -228,6 +268,7 @@ impl Engine {
             NetEvent::StreamAcked { peer, ack } => self.on_stream_ack(peer, ack).await,
             NetEvent::PairingReplied { peer, reply } => self.on_pairing_reply(peer, reply).await,
             NetEvent::DeviceInfoReplied { peer, device_name } => {
+                let device_name = peers::clip_device_name(device_name);
                 self.device_names.insert(peer.clone(), device_name.clone());
                 self.emit(UiEvent::DeviceInfoReceived {
                     peer_id: peer.clone(),

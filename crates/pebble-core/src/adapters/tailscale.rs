@@ -78,7 +78,10 @@ struct Node {
 
 pub fn same_owner_peers(raw: &[u8]) -> AppResult<Vec<Ipv4Addr>> {
     let status: Status = serde_json::from_slice(raw).map_err(|e| {
-        AppError::new(ErrorCode::Internal, format!("tailscale 상태를 읽지 못했습니다: {e}"))
+        AppError::new(
+            ErrorCode::Internal,
+            format!("tailscale 상태를 읽지 못했습니다: {e}"),
+        )
     })?;
     let mut found: Vec<Ipv4Addr> = status
         .peers
@@ -108,7 +111,10 @@ mod tests {
     #[test]
     fn keeps_only_online_devices_of_the_same_owner() {
         let ips = same_owner_peers(SAMPLE.as_bytes()).unwrap();
-        assert_eq!(ips, vec![Ipv4Addr::new(100, 64, 0, 2), Ipv4Addr::new(100, 64, 0, 3)]);
+        assert_eq!(
+            ips,
+            vec![Ipv4Addr::new(100, 64, 0, 2), Ipv4Addr::new(100, 64, 0, 3)]
+        );
     }
 
     #[test]
@@ -122,7 +128,9 @@ mod tests {
     async fn reads_real_tailscale_status() {
         let addresses = TailscaleDirectory::new(47123).addresses().await.unwrap();
         println!("{addresses:?}");
-        assert!(addresses.iter().all(|a| a.starts_with("/ip4/100.") && a.ends_with("/tcp/47123")));
+        assert!(addresses
+            .iter()
+            .all(|a| a.starts_with("/ip4/100.") && a.ends_with("/tcp/47123")));
     }
 
     #[test]

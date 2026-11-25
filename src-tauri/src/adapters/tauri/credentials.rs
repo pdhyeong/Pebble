@@ -26,7 +26,9 @@ impl CredentialStore for TauriCredentialStore {
         let store = self.app.store(STORE_FILE).map_err(store_error)?;
         let get = |key: &str| store.get(key).and_then(|v| v.as_str().map(String::from));
         let creds = match (get(KEY_SECRET), get(KEY_DB_ID), get(KEY_PEER)) {
-            (Some(device_secret), Some(device_db_id), Some(stored_peer)) if stored_peer == peer.as_str() => {
+            (Some(device_secret), Some(device_db_id), Some(stored_peer))
+                if stored_peer == peer.as_str() =>
+            {
                 Some(DeviceCredentials {
                     peer_id: peer.clone(),
                     device_db_id,

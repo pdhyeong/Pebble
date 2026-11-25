@@ -166,9 +166,18 @@ mod tests {
         let mut counter = ChunkCounter::new(10);
         assert_eq!(
             counter.accept(1, 5),
-            Err(ChunkError::OutOfOrder { expected: 0, got: 1 })
+            Err(ChunkError::OutOfOrder {
+                expected: 0,
+                got: 1
+            })
         );
-        assert_eq!(counter.accept(0, 11), Err(ChunkError::WrongLength { expected: 10, got: 11 }));
+        assert_eq!(
+            counter.accept(0, 11),
+            Err(ChunkError::WrongLength {
+                expected: 10,
+                got: 11
+            })
+        );
         counter.accept(0, 10).unwrap();
         assert_eq!(counter.accept(1, 1), Err(ChunkError::TooManyChunks));
     }
@@ -178,12 +187,18 @@ mod tests {
         let mut counter = ChunkCounter::new(2 * CHUNK_SIZE as u64);
         assert_eq!(
             counter.accept(0, 1),
-            Err(ChunkError::WrongLength { expected: CHUNK_SIZE as u64, got: 1 })
+            Err(ChunkError::WrongLength {
+                expected: CHUNK_SIZE as u64,
+                got: 1
+            })
         );
         counter.accept(0, CHUNK_SIZE).unwrap();
         assert_eq!(
             counter.accept(1, CHUNK_SIZE - 1),
-            Err(ChunkError::WrongLength { expected: CHUNK_SIZE as u64, got: CHUNK_SIZE as u64 - 1 })
+            Err(ChunkError::WrongLength {
+                expected: CHUNK_SIZE as u64,
+                got: CHUNK_SIZE as u64 - 1
+            })
         );
         assert!(!counter.is_complete());
     }
@@ -204,7 +219,13 @@ mod tests {
     #[test]
     fn enums_serialize_to_contract_strings() {
         assert_eq!(serde_json::to_value(Direction::Upload).unwrap(), "upload");
-        assert_eq!(serde_json::to_value(TransferStatus::Cancelled).unwrap(), "cancelled");
-        assert_eq!(serde_json::to_value(CancelReason::PeerCancelled).unwrap(), "peer_cancelled");
+        assert_eq!(
+            serde_json::to_value(TransferStatus::Cancelled).unwrap(),
+            "cancelled"
+        );
+        assert_eq!(
+            serde_json::to_value(CancelReason::PeerCancelled).unwrap(),
+            "peer_cancelled"
+        );
     }
 }

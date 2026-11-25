@@ -90,7 +90,12 @@ where
         write_frame::<F, _, _>(io, &req).await
     }
 
-    async fn write_response<T>(&mut self, _: &StreamProtocol, io: &mut T, res: Resp) -> io::Result<()>
+    async fn write_response<T>(
+        &mut self,
+        _: &StreamProtocol,
+        io: &mut T,
+        res: Resp,
+    ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
@@ -165,8 +170,17 @@ mod tests {
     fn roundtrips_a_message() {
         let mut codec = TestCodec::default();
         let mut wire = Cursor::new(Vec::new());
-        let msg = Msg { text: "안녕".into() };
-        block_on(codec.write_request(&protocol(), &mut wire, Msg { text: "안녕".into() })).unwrap();
+        let msg = Msg {
+            text: "안녕".into(),
+        };
+        block_on(codec.write_request(
+            &protocol(),
+            &mut wire,
+            Msg {
+                text: "안녕".into(),
+            },
+        ))
+        .unwrap();
         wire.set_position(0);
         let read = block_on(codec.read_request(&protocol(), &mut wire)).unwrap();
         assert_eq!(read, msg);

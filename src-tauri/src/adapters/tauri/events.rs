@@ -23,7 +23,10 @@ impl UiEvents for TauriUiEvents {
                 return;
             }
         };
-        let (Some(name), Some(payload)) = (value.get("event").and_then(Value::as_str), value.get("payload")) else {
+        let (Some(name), Some(payload)) = (
+            value.get("event").and_then(Value::as_str),
+            value.get("payload"),
+        ) else {
             eprintln!("[ui] 이벤트 모양이 올바르지 않습니다: {value}");
             return;
         };

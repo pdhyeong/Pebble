@@ -16,6 +16,7 @@ use crate::domain::transfer::{
 const ENGINE_STOPPED: &str = "P2P 엔진이 종료되어 전송을 멈췄습니다.";
 const STALLED: &str = "상대 기기가 응답하지 않아 전송을 멈췄습니다.";
 pub(super) const STALL_TIMEOUT: Duration = Duration::from_secs(120);
+const EARLY_CANCEL_LIMIT: usize = 256;
 
 pub(super) struct Outgoing {
     peer: PeerId,
@@ -63,7 +64,12 @@ struct Step {
 }
 
 impl Engine {
-    pub(super) fn start_download(&mut self, peer: PeerId, path: &RelativePath) -> AppResult<TransferId> {
+    pub(super) fn start_download(
+        &mut self,
+        peer: PeerId,
+        path: &RelativePath,
+    ) -> AppResult<TransferId> {
+        self.require_trusted(&peer)?;
         let name = path.file_name().ok_or_else(|| {
             AppError::new(ErrorCode::InvalidPath, "다운로드할 파일 경로가 비었습니다.")
         })?;
@@ -100,9 +106,16 @@ impl Engine {
         file: &Path,
         remote_dir: &RelativePath,
     ) -> AppResult<TransferId> {
+        self.require_trusted(&peer)?;
         let opened = self.deps.files.open_local(file).await?;
         let transfer_id = TransferId::generate();
-        self.begin_outgoing(peer, transfer_id.clone(), opened, remote_dir.to_display(), false);
+        self.begin_outgoing(
+            peer,
+            transfer_id.clone(),
+            opened,
+            remote_dir.to_display(),
+            false,
+        );
         Ok(transfer_id)
     }
 
@@ -144,13 +157,24 @@ impl Engine {
         );
     }
 
-    pub(super) async fn on_stream_request(&mut self, peer: PeerId, inbound: InboundId, msg: StreamMsg) {
+    pub(super) async fn on_stream_request(
+        &mut self,
+        peer: PeerId,
+        inbound: InboundId,
+        msg: StreamMsg,
+    ) {
         if !self.trusted.contains(&peer) {
-            self.ack(inbound, msg.transfer_id().clone(), Err(NOT_PAIRED.to_string()));
+            self.ack(
+                inbound,
+                msg.transfer_id().clone(),
+                Err(NOT_PAIRED.to_string()),
+            );
             return;
         }
         match msg {
-            StreamMsg::Pull { transfer_id, path } => self.serve_pull(peer, inbound, transfer_id, &path).await,
+            StreamMsg::Pull { transfer_id, path } => {
+                self.serve_pull(peer, inbound, transfer_id, &path).await
+            }
             StreamMsg::Init {
                 transfer_id,
                 file_name,
@@ -158,7 +182,11 @@ impl Engine {
                 remote_path,
                 for_pull,
             } => {
-                let target = if for_pull { None } else { Some(remote_path.as_str()) };
+                let target = if for_pull {
+                    None
+                } else {
+                    Some(remote_path.as_str())
+                };
                 self.on_init(peer, inbound, transfer_id, file_name, total_size, target)
                     .await
             }
@@ -166,10 +194,19 @@ impl Engine {
                 transfer_id,
                 index,
                 data,
-            } => self.on_chunk(&peer, inbound, transfer_id, index, &data).await,
+            } => {
+                self.on_chunk(&peer, inbound, transfer_id, index, &data)
+                    .await
+            }
             StreamMsg::Cancel { transfer_id } => {
-                self.end_transfer(&transfer_id, Ending::Cancelled(CancelReason::PeerCancelled), false, Some(&peer))
-                    .await;
+                self.remember_early_cancel(&transfer_id, &peer);
+                self.end_transfer(
+                    &transfer_id,
+                    Ending::Cancelled(CancelReason::PeerCancelled),
+                    false,
+                    Some(&peer),
+                )
+                .await;
                 self.ack(inbound, transfer_id, Ok(()));
             }
         }
@@ -185,9 +222,19 @@ impl Engine {
         });
     }
 
-    async fn serve_pull(&mut self, peer: PeerId, inbound: InboundId, transfer_id: TransferId, path: &str) {
+    async fn serve_pull(
+        &mut self,
+        peer: PeerId,
+        inbound: InboundId,
+        transfer_id: TransferId,
+        path: &str,
+    ) {
         if self.outgoing.contains_key(&transfer_id) {
-            self.ack(inbound, transfer_id, Err("이미 진행 중인 전송 ID 입니다.".to_string()));
+            self.ack(
+                inbound,
+                transfer_id,
+                Err("이미 진행 중인 전송 ID 입니다.".to_string()),
+            );
             return;
         }
         let root = self.deps.settings.get().shared_folder;
@@ -214,7 +261,19 @@ impl Engine {
         upload_dir: Option<&str>,
     ) {
         if self.incoming.contains_key(&transfer_id) {
-            self.ack(inbound, transfer_id, Err("이미 진행 중인 전송 ID 입니다.".to_string()));
+            self.ack(
+                inbound,
+                transfer_id,
+                Err("이미 진행 중인 전송 ID 입니다.".to_string()),
+            );
+            return;
+        }
+        if self.take_early_cancel(&transfer_id, &peer) {
+            self.ack(
+                inbound,
+                transfer_id,
+                Err("이미 취소한 전송입니다.".to_string()),
+            );
             return;
         }
         let pull = match self.pulls.get(&transfer_id) {
@@ -222,15 +281,32 @@ impl Engine {
             _ => None,
         };
         if upload_dir.is_none() && pull.is_none() {
-            self.ack(inbound, transfer_id, Err("요청하지 않았거나 이미 취소한 다운로드입니다.".to_string()));
+            self.ack(
+                inbound,
+                transfer_id,
+                Err("요청하지 않았거나 이미 취소한 다운로드입니다.".to_string()),
+            );
             return;
         }
         let sink = match self.open_incoming(upload_dir, &file_name).await {
             Ok(sink) => sink,
             Err(e) => {
                 if pull.is_some() {
-                    self.emit_failed(&transfer_id, Direction::Download, &peer, &file_name, &e.message);
-                    self.record(Direction::Download, &peer, &file_name, total_size, TransferStatus::Failed, None);
+                    self.emit_failed(
+                        &transfer_id,
+                        Direction::Download,
+                        &peer,
+                        &file_name,
+                        &e.message,
+                    );
+                    self.record(
+                        Direction::Download,
+                        &peer,
+                        &file_name,
+                        total_size,
+                        TransferStatus::Failed,
+                        None,
+                    );
                 }
                 self.ack(inbound, transfer_id, Err(e.message));
                 return;
@@ -264,22 +340,51 @@ impl Engine {
         self.ack(inbound, transfer_id, result);
     }
 
-    async fn open_incoming(&self, upload_dir: Option<&str>, file_name: &str) -> AppResult<Box<dyn ChunkSink>> {
+    async fn open_incoming(
+        &self,
+        upload_dir: Option<&str>,
+        file_name: &str,
+    ) -> AppResult<Box<dyn ChunkSink>> {
         let name = FileName::parse(file_name)?;
         let Some(upload_dir) = upload_dir else {
-            return self.deps.files.create_incoming(IncomingTarget::Downloads, &name).await;
+            return self
+                .deps
+                .files
+                .create_incoming(IncomingTarget::Downloads, &name)
+                .await;
         };
         let dir = RelativePath::parse(upload_dir)?;
         let root = self.deps.settings.get().shared_folder;
         self.deps
             .files
-            .create_incoming(IncomingTarget::Shared { root: &root, dir: &dir }, &name)
+            .create_incoming(
+                IncomingTarget::Shared {
+                    root: &root,
+                    dir: &dir,
+                },
+                &name,
+            )
             .await
     }
 
-    async fn on_chunk(&mut self, peer: &PeerId, inbound: InboundId, transfer_id: TransferId, index: u32, data: &[u8]) {
-        let Some(entry) = self.incoming.get_mut(&transfer_id).filter(|t| &t.peer == peer) else {
-            self.ack(inbound, transfer_id, Err("전송 세션을 찾을 수 없습니다.".to_string()));
+    async fn on_chunk(
+        &mut self,
+        peer: &PeerId,
+        inbound: InboundId,
+        transfer_id: TransferId,
+        index: u32,
+        data: &[u8],
+    ) {
+        let Some(entry) = self
+            .incoming
+            .get_mut(&transfer_id)
+            .filter(|t| &t.peer == peer)
+        else {
+            self.ack(
+                inbound,
+                transfer_id,
+                Err("전송 세션을 찾을 수 없습니다.".to_string()),
+            );
             return;
         };
         entry.touched = Instant::now();
@@ -294,8 +399,13 @@ impl Engine {
             entry.counter.is_complete(),
         );
         if let Err(error) = written {
-            self.end_transfer(&transfer_id, Ending::Failed(error.clone()), false, Some(peer))
-                .await;
+            self.end_transfer(
+                &transfer_id,
+                Ending::Failed(error.clone()),
+                false,
+                Some(peer),
+            )
+            .await;
             self.ack(inbound, transfer_id, Err(error));
             return;
         }
@@ -331,12 +441,32 @@ impl Engine {
                     saved_path: Some(saved.display().to_string()),
                     speed_bps: speed,
                 });
-                self.record(Direction::Download, &t.peer, &t.file_name, size, TransferStatus::Completed, speed);
+                self.record(
+                    Direction::Download,
+                    &t.peer,
+                    &t.file_name,
+                    size,
+                    TransferStatus::Completed,
+                    speed,
+                );
                 Ok(())
             }
             Err(e) => {
-                self.emit_failed(transfer_id, Direction::Download, &t.peer, &t.file_name, &e.message);
-                self.record(Direction::Download, &t.peer, &t.file_name, size, TransferStatus::Failed, None);
+                self.emit_failed(
+                    transfer_id,
+                    Direction::Download,
+                    &t.peer,
+                    &t.file_name,
+                    &e.message,
+                );
+                self.record(
+                    Direction::Download,
+                    &t.peer,
+                    &t.file_name,
+                    size,
+                    TransferStatus::Failed,
+                    None,
+                );
                 Err(e.message)
             }
         }
@@ -412,16 +542,29 @@ impl Engine {
             saved_path: None,
             speed_bps: speed,
         });
-        self.record(Direction::Upload, &t.peer, &t.file_name, size, TransferStatus::Completed, speed);
+        self.record(
+            Direction::Upload,
+            &t.peer,
+            &t.file_name,
+            size,
+            TransferStatus::Completed,
+            speed,
+        );
     }
 
     pub(super) async fn cancel_by_user(&mut self, transfer_id: &TransferId) {
-        self.end_transfer(transfer_id, Ending::Cancelled(CancelReason::UserCancelled), true, None)
-            .await;
+        self.end_transfer(
+            transfer_id,
+            Ending::Cancelled(CancelReason::UserCancelled),
+            true,
+            None,
+        )
+        .await;
     }
 
     pub(super) async fn fail_transfer(&mut self, transfer_id: &TransferId, error: String) {
-        self.end_transfer(transfer_id, Ending::Failed(error), false, None).await;
+        self.end_transfer(transfer_id, Ending::Failed(error), false, None)
+            .await;
     }
 
     pub(super) async fn fail_transfers_of(&mut self, peer: &PeerId, error: &str) {
@@ -430,15 +573,50 @@ impl Engine {
             .iter()
             .filter(|(_, t)| &t.peer == peer)
             .map(|(id, _)| id.clone())
-            .chain(self.incoming.iter().filter(|(_, t)| &t.peer == peer).map(|(id, _)| id.clone()))
-            .chain(self.pulls.iter().filter(|(_, t)| &t.peer == peer).map(|(id, _)| id.clone()))
+            .chain(
+                self.incoming
+                    .iter()
+                    .filter(|(_, t)| &t.peer == peer)
+                    .map(|(id, _)| id.clone()),
+            )
+            .chain(
+                self.pulls
+                    .iter()
+                    .filter(|(_, t)| &t.peer == peer)
+                    .map(|(id, _)| id.clone()),
+            )
             .collect();
         for id in ids {
-            self.end_transfer(&id, Ending::Failed(error.to_string()), false, None).await;
+            self.end_transfer(&id, Ending::Failed(error.to_string()), false, None)
+                .await;
         }
     }
 
+    fn remember_early_cancel(&mut self, transfer_id: &TransferId, peer: &PeerId) {
+        let known = self.incoming.contains_key(transfer_id)
+            || self.outgoing.contains_key(transfer_id)
+            || self.pulls.contains_key(transfer_id);
+        if known {
+            return;
+        }
+        if self.early_cancels.len() >= EARLY_CANCEL_LIMIT {
+            self.early_cancels.pop_front();
+        }
+        self.early_cancels
+            .push_back((transfer_id.clone(), peer.clone(), Instant::now()));
+    }
+
+    fn take_early_cancel(&mut self, transfer_id: &TransferId, peer: &PeerId) -> bool {
+        let found = self
+            .early_cancels
+            .iter()
+            .position(|(id, from, _)| id == transfer_id && from == peer);
+        found.is_some_and(|i| self.early_cancels.remove(i).is_some())
+    }
+
     pub(super) async fn sweep_stalled(&mut self) {
+        self.early_cancels
+            .retain(|(_, _, at)| at.elapsed() <= STALL_TIMEOUT);
         let stalled: Vec<TransferId> = self
             .incoming
             .iter()
@@ -471,7 +649,13 @@ impl Engine {
         }
     }
 
-    async fn end_transfer(&mut self, transfer_id: &TransferId, ending: Ending, notify_peer: bool, only_peer: Option<&PeerId>) {
+    async fn end_transfer(
+        &mut self,
+        transfer_id: &TransferId,
+        ending: Ending,
+        notify_peer: bool,
+        only_peer: Option<&PeerId>,
+    ) {
         let Some(taken) = self.take_transfer(transfer_id, only_peer) else {
             return;
         };
@@ -498,16 +682,37 @@ impl Engine {
                 TransferStatus::Cancelled
             }
             Ending::Failed(error) => {
-                self.emit_failed(transfer_id, taken.direction, &taken.peer, &taken.file_name, &error);
+                self.emit_failed(
+                    transfer_id,
+                    taken.direction,
+                    &taken.peer,
+                    &taken.file_name,
+                    &error,
+                );
                 TransferStatus::Failed
             }
         };
-        self.record(taken.direction, &taken.peer, &taken.file_name, taken.size, status, None);
+        self.record(
+            taken.direction,
+            &taken.peer,
+            &taken.file_name,
+            taken.size,
+            status,
+            None,
+        );
     }
 
-    fn take_transfer(&mut self, transfer_id: &TransferId, only_peer: Option<&PeerId>) -> Option<Taken> {
+    fn take_transfer(
+        &mut self,
+        transfer_id: &TransferId,
+        only_peer: Option<&PeerId>,
+    ) -> Option<Taken> {
         let matches = |peer: &PeerId| only_peer.is_none_or(|p| p == peer);
-        if self.outgoing.get(transfer_id).is_some_and(|t| matches(&t.peer)) {
+        if self
+            .outgoing
+            .get(transfer_id)
+            .is_some_and(|t| matches(&t.peer))
+        {
             let t = self.outgoing.remove(transfer_id)?;
             return Some(Taken {
                 direction: Direction::Upload,
@@ -517,7 +722,11 @@ impl Engine {
                 sink: None,
             });
         }
-        if self.incoming.get(transfer_id).is_some_and(|t| matches(&t.peer)) {
+        if self
+            .incoming
+            .get(transfer_id)
+            .is_some_and(|t| matches(&t.peer))
+        {
             let t = self.incoming.remove(transfer_id)?;
             return Some(Taken {
                 direction: Direction::Download,
@@ -527,7 +736,11 @@ impl Engine {
                 sink: Some(t.sink),
             });
         }
-        if self.pulls.get(transfer_id).is_some_and(|t| matches(&t.peer)) {
+        if self
+            .pulls
+            .get(transfer_id)
+            .is_some_and(|t| matches(&t.peer))
+        {
             let t = self.pulls.remove(transfer_id)?;
             return Some(Taken {
                 direction: Direction::Download,
@@ -540,7 +753,14 @@ impl Engine {
         None
     }
 
-    fn emit_failed(&self, transfer_id: &TransferId, direction: Direction, peer: &PeerId, file_name: &str, error: &str) {
+    fn emit_failed(
+        &self,
+        transfer_id: &TransferId,
+        direction: Direction,
+        peer: &PeerId,
+        file_name: &str,
+        error: &str,
+    ) {
         self.emit(UiEvent::TransferFailed {
             transfer_id: transfer_id.clone(),
             direction,
@@ -558,7 +778,9 @@ async fn read_step(t: &mut Outgoing) -> Result<Step, String> {
         Err(e) => return Err(e.message),
     };
     let index = t.counter.next_index();
-    t.counter.accept(index, data.len()).map_err(|e| e.to_string())?;
+    t.counter
+        .accept(index, data.len())
+        .map_err(|e| e.to_string())?;
     Ok(Step {
         peer: t.peer.clone(),
         index,

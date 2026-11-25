@@ -28,6 +28,8 @@ cargo install --path crates/pebble-cli
 
 설치하면 `~/.cargo/bin/pebble-cli` 가 생긴다.
 
+개발할 때 저장소 루트의 `cargo build`·`cargo test` 는 `pebble-core`·`pebble-cli` 만 다룬다. 화면 앱(`src-tauri`)은 서버 등록 키(`src-tauri/.env`)가 있어야 빌드되므로 `pnpm tauri dev` 나 `cargo test --workspace` 로 따로 돌린다.
+
 ## 켜 두기
 
 ```bash
@@ -70,7 +72,7 @@ journalctl --user -u pebble -f
 ## 기기 찾기
 
 - **Tailscale**: 30초마다 `tailscale status --json` 을 읽는다. **나와 같은 Tailscale 계정이고 켜져 있는 기기**에만 `100.x.x.x:47123` 으로 연결을 시도한다. 같은 망의 다른 사람 기기에는 시도하지 않는다. 실패는 화면이나 로그에 남기지 않는다.
-- **같은 와이파이**: 예전처럼 mDNS 로 찾는다.
+- **같은 와이파이**: 예전처럼 mDNS 로 찾는다. 찾기만 하고 자동으로 붙지는 않으니 daemon 로그의 주소로 `connect` 한다.
 - **직접**: `pebble-cli connect /ip4/100.64.0.2/tcp/47123`
 
 ## 처음 한 번: 페어링
@@ -101,6 +103,9 @@ pebble-cli cancel <전송ID>
 
 - `send` 는 상대 공유 폴더의 `<폴더>` 에 넣는다. `get` 은 내 다운로드 폴더에 받는다.
 - 둘 다 끝날 때까지 기다리고, 실패하면 종료 코드 1 을 돌려준다.
+- 페어링한 기기와만 주고받는다. 페어링 요청은 170초 안에 승인해야 한다.
+- 명령을 Ctrl-C 로 끊어도 전송은 켜져 있는 Pebble 에서 계속된다. 멈추려면 `cancel` 을 쓴다.
+- 진행 알림을 너무 많이 놓치면(동시에 큰 전송 여러 개) 명령이 "알림을 놓쳤습니다" 로 끝난다. 전송 자체는 계속되니 받은 폴더나 `peers` 로 확인한다.
 - 같은 이름의 파일이 이미 있으면 덮어쓰지 않고 `이름 (1).확장자` 로 저장한다.
 - `<기기>` 에는 기기 이름, PeerId, PeerId 앞 6자 이상을 쓸 수 있다.
 

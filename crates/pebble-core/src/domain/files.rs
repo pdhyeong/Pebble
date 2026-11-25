@@ -33,7 +33,14 @@ mod tests {
 
     #[test]
     fn ignores_hidden_and_temporary_files() {
-        for name in [".DS_Store", ".hidden", "a.swp", "a.swx", "movie.mp4.part", "x.tmp"] {
+        for name in [
+            ".DS_Store",
+            ".hidden",
+            "a.swp",
+            "a.swx",
+            "movie.mp4.part",
+            "x.tmp",
+        ] {
             assert!(is_ignored_name(name), "{name}");
         }
         for name in ["a.txt", "report.partial", "tmp"] {

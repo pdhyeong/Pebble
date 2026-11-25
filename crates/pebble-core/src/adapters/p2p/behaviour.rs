@@ -40,11 +40,16 @@ pub struct PebbleBehaviour {
     pub directory_changed: request_response::Behaviour<DirChangedCodec>,
 }
 
-pub fn new_behaviour(key: &identity::Keypair) -> Result<PebbleBehaviour, Box<dyn Error + Send + Sync>> {
+pub fn new_behaviour(
+    key: &identity::Keypair,
+) -> Result<PebbleBehaviour, Box<dyn Error + Send + Sync>> {
     let peer_id = key.public().to_peer_id();
     Ok(PebbleBehaviour {
         mdns: mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id)?,
-        identify: identify::Behaviour::new(identify::Config::new(AGENT_PROTOCOL.into(), key.public())),
+        identify: identify::Behaviour::new(identify::Config::new(
+            AGENT_PROTOCOL.into(),
+            key.public(),
+        )),
         ping: ping::Behaviour::new(ping::Config::new()),
         file_list: request_response_behaviour(FILE_LIST_PROTOCOL, DEFAULT_TIMEOUT),
         stream: request_response_behaviour(STREAM_PROTOCOL, STREAM_TIMEOUT),
@@ -54,11 +59,17 @@ pub fn new_behaviour(key: &identity::Keypair) -> Result<PebbleBehaviour, Box<dyn
     })
 }
 
-fn request_response_behaviour<C>(protocol: &'static str, timeout: Duration) -> request_response::Behaviour<C>
+fn request_response_behaviour<C>(
+    protocol: &'static str,
+    timeout: Duration,
+) -> request_response::Behaviour<C>
 where
     C: request_response::Codec<Protocol = StreamProtocol> + Default + Clone + Send + 'static,
 {
     let mut config = request_response::Config::default();
     config.set_request_timeout(timeout);
-    request_response::Behaviour::new([(StreamProtocol::new(protocol), ProtocolSupport::Full)], config)
+    request_response::Behaviour::new(
+        [(StreamProtocol::new(protocol), ProtocolSupport::Full)],
+        config,
+    )
 }

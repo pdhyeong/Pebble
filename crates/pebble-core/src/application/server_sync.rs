@@ -11,6 +11,8 @@ use crate::domain::peer::PeerId;
 
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 pub const SYNC_BUFFER: usize = 1;
+pub const REGISTER_RETRY_FIRST: Duration = Duration::from_secs(5);
+pub const REGISTER_RETRY_MAX: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 pub struct ServerDeps {
@@ -42,16 +44,10 @@ async fn run(
     mut sync_requests: mpsc::Receiver<()>,
 ) {
     let creds = tokio::select! {
-        creds = load_or_register(&deps, &peer) => creds,
+        creds = register_until_ok(&deps, &peer) => creds,
         _ = stop.changed() => return,
     };
-    let creds = match creds {
-        Ok(creds) => creds,
-        Err(e) => {
-            eprintln!("[server] 기기 등록 실패: {e}");
-            return;
-        }
-    };
+    sync_files(&deps, &creds).await;
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
     loop {
         tokio::select! {
@@ -68,6 +64,21 @@ async fn run(
                 sync_files(&deps, &creds).await;
             }
         }
+    }
+}
+
+async fn register_until_ok(deps: &ServerDeps, peer: &PeerId) -> DeviceCredentials {
+    let mut wait = REGISTER_RETRY_FIRST;
+    loop {
+        match load_or_register(deps, peer).await {
+            Ok(creds) => return creds,
+            Err(e) => eprintln!(
+                "[server] 기기 등록 실패, {}초 뒤 다시 시도합니다: {e}",
+                wait.as_secs()
+            ),
+        }
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(REGISTER_RETRY_MAX);
     }
 }
 

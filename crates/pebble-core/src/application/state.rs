@@ -12,7 +12,10 @@ impl SettingsStore {
     }
 
     pub fn get(&self) -> Settings {
-        self.0.read().unwrap_or_else(PoisonError::into_inner).clone()
+        self.0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub fn update(&self, change: impl FnOnce(&mut Settings)) {
@@ -25,10 +28,16 @@ pub struct ActivityStore(Arc<Mutex<ActivityLog>>);
 
 impl ActivityStore {
     pub fn push(&self, record: ActivityRecord) {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).push(record);
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(record);
     }
 
     pub fn snapshot(&self) -> Vec<ActivityRecord> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).snapshot()
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .snapshot()
     }
 }

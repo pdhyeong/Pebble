@@ -45,7 +45,11 @@ mod tests {
     #[test]
     fn rejects_empty_and_non_base58() {
         for raw in ["", "   ", "12D3Koo0", "abc/def", "peer:addr"] {
-            assert_eq!(PeerId::parse(raw).unwrap_err().code, ErrorCode::InvalidPeerId, "{raw}");
+            assert_eq!(
+                PeerId::parse(raw).unwrap_err().code,
+                ErrorCode::InvalidPeerId,
+                "{raw}"
+            );
         }
     }
 }

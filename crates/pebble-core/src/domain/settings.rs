@@ -35,7 +35,10 @@ mod tests {
     #[test]
     fn default_folder_is_under_home() {
         let settings = Settings::with_home(Some(PathBuf::from("/home/u")));
-        assert_eq!(settings.shared_folder, PathBuf::from("/home/u/Pebble/Shared"));
+        assert_eq!(
+            settings.shared_folder,
+            PathBuf::from("/home/u/Pebble/Shared")
+        );
     }
 
     #[test]

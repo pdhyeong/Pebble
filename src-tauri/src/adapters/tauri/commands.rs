@@ -29,12 +29,20 @@ pub async fn connect_to_peer(addr: String, services: Services<'_>) -> AppResult<
 }
 
 #[tauri::command]
-pub async fn request_file_list(peer_id: String, path: String, services: Services<'_>) -> AppResult<()> {
+pub async fn request_file_list(
+    peer_id: String,
+    path: String,
+    services: Services<'_>,
+) -> AppResult<()> {
     services.request_file_list(&peer_id, path).await
 }
 
 #[tauri::command]
-pub async fn download_file(peer_id: String, path: String, services: Services<'_>) -> AppResult<String> {
+pub async fn download_file(
+    peer_id: String,
+    path: String,
+    services: Services<'_>,
+) -> AppResult<String> {
     Ok(services.download(&peer_id, &path).await?.to_string())
 }
 
@@ -62,7 +70,11 @@ pub async fn request_pairing(peer_id: String, services: Services<'_>) -> AppResu
 }
 
 #[tauri::command]
-pub async fn respond_pairing(peer_id: String, approved: bool, services: Services<'_>) -> AppResult<()> {
+pub async fn respond_pairing(
+    peer_id: String,
+    approved: bool,
+    services: Services<'_>,
+) -> AppResult<()> {
     services.respond_pairing(&peer_id, approved).await
 }
 
@@ -107,7 +119,10 @@ pub fn get_show_folder_name(services: Services<'_>) -> bool {
 }
 
 #[tauri::command]
-pub async fn get_local_shared_files(relative_path: String, services: Services<'_>) -> AppResult<Vec<FileEntry>> {
+pub async fn get_local_shared_files(
+    relative_path: String,
+    services: Services<'_>,
+) -> AppResult<Vec<FileEntry>> {
     services.local_shared_files(&relative_path).await
 }
 

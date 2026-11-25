@@ -120,7 +120,11 @@ impl ServerApi for HttpServerApi {
         ensure_success(response, "heartbeat").await.map(drop)
     }
 
-    async fn sync_files(&self, creds: &DeviceCredentials, files: Vec<FileSnapshot>) -> AppResult<()> {
+    async fn sync_files(
+        &self,
+        creds: &DeviceCredentials,
+        files: Vec<FileSnapshot>,
+    ) -> AppResult<()> {
         let files = files
             .into_iter()
             .map(|f| ServerFileItem {
@@ -152,7 +156,10 @@ async fn ensure_success(response: reqwest::Response, what: &str) -> AppResult<re
         return Ok(response);
     }
     let body = response.text().await.unwrap_or_default();
-    Err(AppError::new(ErrorCode::Network, format!("{what} 실패 HTTP {status}: {body}")))
+    Err(AppError::new(
+        ErrorCode::Network,
+        format!("{what} 실패 HTTP {status}: {body}"),
+    ))
 }
 
 fn network_error(what: &str, err: &reqwest::Error) -> AppError {

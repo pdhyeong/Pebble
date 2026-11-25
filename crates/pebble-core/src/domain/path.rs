@@ -80,7 +80,12 @@ impl FileName {
     }
 
     pub fn partial(&self, tag: &str) -> String {
-        format!(".{}.{tag}.part", self.0)
+        let room = MAX_FILE_NAME_BYTES.saturating_sub(tag.len() + PARTIAL_OVERHEAD);
+        let mut cut = self.0.len().min(room);
+        while !self.0.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!(".{}.{tag}.part", &self.0[..cut])
     }
 
     pub fn numbered(&self, n: u32) -> Self {
@@ -91,9 +96,13 @@ impl FileName {
     }
 }
 
+const MAX_FILE_NAME_BYTES: usize = 255;
+const PARTIAL_OVERHEAD: usize = ".".len() + ".".len() + ".part".len();
+
 fn is_drive_prefix(segment: &str) -> bool {
     let bytes = segment.as_bytes();
-    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    drive || (cfg!(windows) && segment.contains(':'))
 }
 
 fn invalid_path(raw: &str) -> AppError {
@@ -112,7 +121,13 @@ mod tests {
         let rel = RelativePath::parse("/a//./b\\c/").unwrap();
         assert_eq!(rel.to_display(), "/a/b/c");
         assert_eq!(RelativePath::parse("/").unwrap().segments().count(), 0);
-        assert_eq!(RelativePath::parse("a//b").unwrap().segments().collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(
+            RelativePath::parse("a//b")
+                .unwrap()
+                .segments()
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
     }
 
     #[test]
@@ -138,10 +153,22 @@ mod tests {
             assert!(FileName::parse(raw).is_err(), "{raw}");
         }
         assert_eq!(FileName::parse(".env").unwrap().as_str(), ".env");
-        assert_eq!(FileName::parse("보고서.pdf").unwrap().partial("ab12"), ".보고서.pdf.ab12.part");
-        assert_eq!(FileName::parse("보고서.pdf").unwrap().numbered(2).as_str(), "보고서 (2).pdf");
-        assert_eq!(FileName::parse("README").unwrap().numbered(1).as_str(), "README (1)");
-        assert_eq!(FileName::parse(".env").unwrap().numbered(1).as_str(), ".env (1)");
+        assert_eq!(
+            FileName::parse("보고서.pdf").unwrap().partial("ab12"),
+            ".보고서.pdf.ab12.part"
+        );
+        assert_eq!(
+            FileName::parse("보고서.pdf").unwrap().numbered(2).as_str(),
+            "보고서 (2).pdf"
+        );
+        assert_eq!(
+            FileName::parse("README").unwrap().numbered(1).as_str(),
+            "README (1)"
+        );
+        assert_eq!(
+            FileName::parse(".env").unwrap().numbered(1).as_str(),
+            ".env (1)"
+        );
     }
 
     #[test]

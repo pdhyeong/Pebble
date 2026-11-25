@@ -1,13 +1,21 @@
+use std::io::Write;
+use tokio::sync::broadcast::{error::RecvError, Receiver};
+
 use pebble_core::application::events::UiEvent;
-use pebble_core::application::ports::UiEvents;
 use pebble_core::domain::transfer::Direction;
 
-pub struct LogPrinter;
-
-impl UiEvents for LogPrinter {
-    fn emit(&self, event: UiEvent) {
-        if let Some(line) = describe(&event) {
-            println!("[{}] {line}", utc_clock());
+pub async fn print_events(mut events: Receiver<UiEvent>) {
+    loop {
+        let line = match events.recv().await {
+            Ok(event) => describe(&event),
+            Err(RecvError::Lagged(missed)) => Some(format!("로그 {missed}줄을 건너뛰었습니다")),
+            Err(RecvError::Closed) => return,
+        };
+        if let Some(line) = line {
+            let written = writeln!(std::io::stdout().lock(), "[{}] {line}", utc_clock());
+            if written.is_err() {
+                return;
+            }
         }
     }
 }

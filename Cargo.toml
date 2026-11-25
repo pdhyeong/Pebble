@@ -1,5 +1,6 @@
 [workspace]
 members = ["src-tauri", "crates/pebble-core", "crates/pebble-cli"]
+default-members = ["crates/pebble-core", "crates/pebble-cli"]
 resolver = "2"
 
 [workspace.dependencies]

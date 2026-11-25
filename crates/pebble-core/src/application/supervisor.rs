@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
@@ -12,13 +12,18 @@ use crate::domain::peer::PeerId;
 
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
-struct Running {
+#[derive(Clone)]
+struct Active {
     local_peer: PeerId,
+    engine: EngineHandle,
+    sync: mpsc::Sender<()>,
+}
+
+struct Running {
     engine: EngineHandle,
     engine_task: JoinHandle<()>,
     network_task: JoinHandle<()>,
     stop: watch::Sender<bool>,
-    sync: mpsc::Sender<()>,
     server_task: Option<JoinHandle<()>>,
     discovery_task: Option<JoinHandle<()>>,
 }
@@ -29,6 +34,7 @@ pub struct P2pSupervisor {
     server: Option<ServerDeps>,
     directory: Option<Arc<dyn PeerDirectory>>,
     running: Mutex<Option<Running>>,
+    active: RwLock<Option<Active>>,
 }
 
 impl P2pSupervisor {
@@ -44,6 +50,7 @@ impl P2pSupervisor {
             server,
             directory,
             running: Mutex::new(None),
+            active: RwLock::new(None),
         }
     }
 
@@ -54,27 +61,37 @@ impl P2pSupervisor {
                 *running = Some(previous);
                 return Err(AppError::already_running());
             }
+            self.set_active(None);
             shutdown(previous).await;
         }
         let link = self.network.start()?;
-        let (engine, engine_task) = spawn_engine(self.engine_deps.clone(), link.commands, link.events);
+        let (engine, engine_task) =
+            spawn_engine(self.engine_deps.clone(), link.commands, link.events);
         let (stop, stop_rx) = watch::channel(false);
         let (sync, sync_rx) = mpsc::channel(SYNC_BUFFER);
-        let server_task = self
-            .server
-            .clone()
-            .map(|deps| spawn_server_sync(deps, link.local_peer.clone(), engine.clone(), stop_rx.clone(), sync_rx));
+        let server_task = self.server.clone().map(|deps| {
+            spawn_server_sync(
+                deps,
+                link.local_peer.clone(),
+                engine.clone(),
+                stop_rx.clone(),
+                sync_rx,
+            )
+        });
         let discovery_task = self
             .directory
             .clone()
             .map(|directory| spawn_discovery(directory, engine.clone(), stop_rx));
-        *running = Some(Running {
+        self.set_active(Some(Active {
             local_peer: link.local_peer,
+            engine: engine.clone(),
+            sync,
+        }));
+        *running = Some(Running {
             engine,
             engine_task,
             network_task: link.task,
             stop,
-            sync,
             server_task,
             discovery_task,
         });
@@ -84,6 +101,7 @@ impl P2pSupervisor {
     pub async fn stop(&self) -> AppResult<()> {
         let mut running = self.running.lock().await;
         let current = running.take().ok_or_else(AppError::not_running)?;
+        self.set_active(None);
         let was_alive = current.engine.is_alive();
         shutdown(current).await;
         if was_alive {
@@ -94,17 +112,13 @@ impl P2pSupervisor {
     }
 
     pub async fn engine(&self) -> AppResult<EngineHandle> {
-        match self.running.lock().await.as_ref() {
-            Some(r) if r.engine.is_alive() => Ok(r.engine.clone()),
-            _ => Err(AppError::not_running()),
-        }
+        self.alive()
+            .map(|a| a.engine)
+            .ok_or_else(AppError::not_running)
     }
 
     pub async fn local_peer(&self) -> Option<PeerId> {
-        match self.running.lock().await.as_ref() {
-            Some(r) if r.engine.is_alive() => Some(r.local_peer.clone()),
-            _ => None,
-        }
+        self.alive().map(|a| a.local_peer)
     }
 
     pub async fn is_running(&self) -> bool {
@@ -112,10 +126,22 @@ impl P2pSupervisor {
     }
 
     pub async fn folder_changed(&self) {
-        if let Some(r) = self.running.lock().await.as_ref() {
-            r.engine.notify_folder_changed();
-            let _ = r.sync.try_send(());
+        if let Some(a) = self.alive() {
+            a.engine.notify_folder_changed();
+            let _ = a.sync.try_send(());
         }
+    }
+
+    fn alive(&self) -> Option<Active> {
+        self.active
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .filter(|a| a.engine.is_alive())
+    }
+
+    fn set_active(&self, next: Option<Active>) {
+        *self.active.write().unwrap_or_else(PoisonError::into_inner) = next;
     }
 }
 

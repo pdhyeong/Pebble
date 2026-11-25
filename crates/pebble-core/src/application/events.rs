@@ -145,15 +145,66 @@ mod tests {
     fn event_names_match_contract() {
         let id = TransferId::from_wire("t".into());
         let cases = [
-            (UiEvent::P2pStopped { message: String::new() }, "p2p-stopped"),
-            (UiEvent::ListeningOn { address: String::new() }, "listening-on"),
-            (UiEvent::PeerFound { peer_id: peer(), address: String::new() }, "peer-found"),
-            (UiEvent::PingSuccess { peer_id: peer(), rtt_ms: 1 }, "ping-success"),
-            (UiEvent::ConnectionSuccess { peer_id: peer() }, "connection-success"),
-            (UiEvent::DeviceInfoReceived { peer_id: peer(), device_name: String::new() }, "device-info-received"),
-            (UiEvent::FileListRequestSent { peer_id: peer(), path: String::new() }, "file-list-request-sent"),
-            (UiEvent::RemoteFiles { peer_id: peer(), path: String::new(), files: vec![], error: None }, "remote-files"),
-            (UiEvent::LocalFilesChanged { path: String::new(), kind: "modified" }, "local-files-changed"),
+            (
+                UiEvent::P2pStopped {
+                    message: String::new(),
+                },
+                "p2p-stopped",
+            ),
+            (
+                UiEvent::ListeningOn {
+                    address: String::new(),
+                },
+                "listening-on",
+            ),
+            (
+                UiEvent::PeerFound {
+                    peer_id: peer(),
+                    address: String::new(),
+                },
+                "peer-found",
+            ),
+            (
+                UiEvent::PingSuccess {
+                    peer_id: peer(),
+                    rtt_ms: 1,
+                },
+                "ping-success",
+            ),
+            (
+                UiEvent::ConnectionSuccess { peer_id: peer() },
+                "connection-success",
+            ),
+            (
+                UiEvent::DeviceInfoReceived {
+                    peer_id: peer(),
+                    device_name: String::new(),
+                },
+                "device-info-received",
+            ),
+            (
+                UiEvent::FileListRequestSent {
+                    peer_id: peer(),
+                    path: String::new(),
+                },
+                "file-list-request-sent",
+            ),
+            (
+                UiEvent::RemoteFiles {
+                    peer_id: peer(),
+                    path: String::new(),
+                    files: vec![],
+                    error: None,
+                },
+                "remote-files",
+            ),
+            (
+                UiEvent::LocalFilesChanged {
+                    path: String::new(),
+                    kind: "modified",
+                },
+                "local-files-changed",
+            ),
             (
                 UiEvent::TransferProgress {
                     transfer_id: id.clone(),
@@ -174,7 +225,14 @@ mod tests {
                 },
                 "transfer-cancelled",
             ),
-            (UiEvent::PairingApproved { peer_id: peer(), device_name: String::new(), shared_folder_name: None }, "pairing-approved"),
+            (
+                UiEvent::PairingApproved {
+                    peer_id: peer(),
+                    device_name: String::new(),
+                    shared_folder_name: None,
+                },
+                "pairing-approved",
+            ),
         ];
         for (event, name) in cases {
             assert_eq!(event_name(&event), name);
@@ -183,7 +241,10 @@ mod tests {
 
     #[test]
     fn payload_is_an_object_with_snake_case_fields() {
-        let event = UiEvent::PingSuccess { peer_id: peer(), rtt_ms: 12 };
+        let event = UiEvent::PingSuccess {
+            peer_id: peer(),
+            rtt_ms: 12,
+        };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["payload"]["peer_id"], "12D3KooW");
         assert_eq!(json["payload"]["rtt_ms"], 12);

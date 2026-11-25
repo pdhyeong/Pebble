@@ -86,7 +86,11 @@ impl FileStore for LocalFileStore {
         open_file(path).await
     }
 
-    async fn create_incoming(&self, target: IncomingTarget<'_>, name: &FileName) -> AppResult<Box<dyn ChunkSink>> {
+    async fn create_incoming(
+        &self,
+        target: IncomingTarget<'_>,
+        name: &FileName,
+    ) -> AppResult<Box<dyn ChunkSink>> {
         let dir = match target {
             IncomingTarget::Shared { root, dir } => {
                 self.ensure_dir(root).await?;
@@ -107,7 +111,10 @@ impl FileStore for LocalFileStore {
             .map_err(|e| AppError::io("받을 파일을 만들지 못했습니다", &e))?;
         Ok(Box::new(PartFile {
             file,
-            part_path,
+            part: PartGuard {
+                path: part_path,
+                armed: true,
+            },
             dir,
             name: name.clone(),
         }))
@@ -192,9 +199,33 @@ const MAX_NAME_ATTEMPTS: u32 = 1000;
 
 struct PartFile {
     file: fs::File,
-    part_path: PathBuf,
+    part: PartGuard,
     dir: PathBuf,
     name: FileName,
+}
+
+struct PartGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl PartGuard {
+    async fn remove(mut self) {
+        self.armed = false;
+        if let Err(e) = fs::remove_file(&self.path).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[fs] 임시 파일 삭제 실패 {}: {e}", self.path.display());
+            }
+        }
+    }
+}
+
+impl Drop for PartGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 #[async_trait]
@@ -209,7 +240,7 @@ impl ChunkSink for PartFile {
     async fn commit(self: Box<Self>) -> AppResult<PathBuf> {
         let PartFile {
             mut file,
-            part_path,
+            part,
             dir,
             name,
         } = *self;
@@ -220,33 +251,50 @@ impl ChunkSink for PartFile {
             .await
             .map_err(|e| AppError::io("파일을 마무리하지 못했습니다", &e))?;
         drop(file);
-        let final_path = claim_free_name(&part_path, &dir, &name).await?;
-        if let Err(e) = fs::remove_file(&part_path).await {
-            eprintln!("[fs] 임시 파일 삭제 실패 {}: {e}", part_path.display());
-        }
+        let final_path = claim_free_name(&part.path, &dir, &name).await?;
+        part.remove().await;
         Ok(final_path)
     }
 
     async fn abort(self: Box<Self>) {
-        let PartFile { file, part_path, .. } = *self;
+        let PartFile { file, part, .. } = *self;
         drop(file);
-        if let Err(e) = fs::remove_file(&part_path).await {
-            eprintln!("[fs] 임시 파일 삭제 실패 {}: {e}", part_path.display());
-        }
+        part.remove().await;
     }
 }
 
 async fn claim_free_name(part_path: &Path, dir: &Path, name: &FileName) -> AppResult<PathBuf> {
     for n in 0..MAX_NAME_ATTEMPTS {
-        let candidate = if n == 0 { name.clone() } else { name.numbered(n) };
+        let candidate = if n == 0 {
+            name.clone()
+        } else {
+            name.numbered(n)
+        };
         let final_path = dir.join(candidate.as_str());
         match fs::hard_link(part_path, &final_path).await {
             Ok(()) => return Ok(final_path),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(AppError::io("받은 파일을 옮기지 못했습니다", &e)),
+            Err(e) => return move_without_link(part_path, &final_path, e).await,
         }
     }
-    Err(AppError::new(ErrorCode::Io, "같은 이름의 파일이 너무 많습니다."))
+    Err(AppError::new(
+        ErrorCode::Io,
+        "같은 이름의 파일이 너무 많습니다.",
+    ))
+}
+
+async fn move_without_link(
+    part_path: &Path,
+    final_path: &Path,
+    link_error: std::io::Error,
+) -> AppResult<PathBuf> {
+    if fs::try_exists(final_path).await.unwrap_or(true) {
+        return Err(AppError::io("받은 파일을 옮기지 못했습니다", &link_error));
+    }
+    fs::rename(part_path, final_path)
+        .await
+        .map(|()| final_path.to_path_buf())
+        .map_err(|e| AppError::io("받은 파일을 옮기지 못했습니다", &e))
 }
 
 fn walk_stats(root: &Path) -> AppResult<FolderStats> {
@@ -256,7 +304,8 @@ fn walk_stats(root: &Path) -> AppResult<FolderStats> {
     }
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
-        let entries = std::fs::read_dir(&dir).map_err(|e| AppError::io("폴더를 읽지 못했습니다", &e))?;
+        let entries =
+            std::fs::read_dir(&dir).map_err(|e| AppError::io("폴더를 읽지 못했습니다", &e))?;
         for entry in entries.flatten() {
             let Ok(file_type) = entry.file_type() else {
                 continue;
@@ -334,7 +383,13 @@ mod tests {
         let dir = RelativePath::parse("/sub").unwrap();
         let name = FileName::parse("a.bin").unwrap();
         let mut sink = store()
-            .create_incoming(IncomingTarget::Shared { root: &root, dir: &dir }, &name)
+            .create_incoming(
+                IncomingTarget::Shared {
+                    root: &root,
+                    dir: &dir,
+                },
+                &name,
+            )
             .await
             .unwrap();
         sink.write(b"hello").await.unwrap();
@@ -358,7 +413,10 @@ mod tests {
         let root = temp_root("same-name");
         let name = FileName::parse("s.txt").unwrap();
         let top = RelativePath::root();
-        let target = || IncomingTarget::Shared { root: &root, dir: &top };
+        let target = || IncomingTarget::Shared {
+            root: &root,
+            dir: &top,
+        };
         std::fs::write(root.join("s.txt"), b"original").unwrap();
         let mut first = store().create_incoming(target(), &name).await.unwrap();
         let mut second = store().create_incoming(target(), &name).await.unwrap();
@@ -382,7 +440,13 @@ mod tests {
         let dir = RelativePath::parse("/link/made_by_peer").unwrap();
         let name = FileName::parse("x.txt").unwrap();
         let err = store()
-            .create_incoming(IncomingTarget::Shared { root: &root, dir: &dir }, &name)
+            .create_incoming(
+                IncomingTarget::Shared {
+                    root: &root,
+                    dir: &dir,
+                },
+                &name,
+            )
             .await
             .err()
             .unwrap();
@@ -449,6 +513,32 @@ mod tests {
         std::fs::write(root.join("x"), b"12").unwrap();
         std::fs::write(root.join("a/b/y"), b"345").unwrap();
         let stats = store().folder_stats(&root).await.unwrap();
-        assert_eq!(stats, FolderStats { total_size: 5, file_count: 2 });
+        assert_eq!(
+            stats,
+            FolderStats {
+                total_size: 5,
+                file_count: 2
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn without_hard_links_the_part_is_renamed_but_never_overwrites() {
+        let root = temp_root("nolink");
+        let part = root.join(".a.txt.x.part");
+        std::fs::write(&part, b"new").unwrap();
+        let target = root.join("a.txt");
+        let no_links = || std::io::Error::other("links unsupported");
+
+        let moved = move_without_link(&part, &target, no_links()).await.unwrap();
+        assert_eq!(moved, target);
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert!(!part.exists());
+
+        std::fs::write(&part, b"second").unwrap();
+        assert!(move_without_link(&part, &target, no_links()).await.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert!(part.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

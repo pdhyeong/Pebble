@@ -23,7 +23,8 @@ pub async fn run(socket: &Path, request: ControlRequest, json: bool) -> Result<(
         if json {
             println!("{raw}");
         }
-        let reply: ControlReply = serde_json::from_str(&raw).map_err(|e| format!("응답을 읽지 못했습니다: {e}"))?;
+        let reply: ControlReply =
+            serde_json::from_str(&raw).map_err(|e| format!("응답을 읽지 못했습니다: {e}"))?;
         match reply {
             ControlReply::Event { event } => {
                 if !json {
@@ -37,7 +38,11 @@ pub async fn run(socket: &Path, request: ControlRequest, json: bool) -> Result<(
                 return Ok(());
             }
             ControlReply::Error { code, message } => {
-                return Err(if json { String::new() } else { format!("{message} ({})", text(&code)) });
+                return Err(if json {
+                    String::new()
+                } else {
+                    format!("{message} ({})", text(&code))
+                });
             }
         }
     }
@@ -62,7 +67,10 @@ fn show_event(event: &Value) {
             payload["total_size"]
         ),
         "transfer-progress" => {
-            eprint!("\r진행 {:>5.1}%", payload["progress"].as_f64().unwrap_or(0.0));
+            eprint!(
+                "\r진행 {:>5.1}%",
+                payload["progress"].as_f64().unwrap_or(0.0)
+            );
             let _ = std::io::stderr().flush();
         }
         _ => {}
@@ -80,7 +88,11 @@ fn show_result(request: &ControlRequest, data: &Value) {
         ControlRequest::Peers => show_peers(data),
         ControlRequest::Ls { .. } => {
             for file in data.as_array().into_iter().flatten() {
-                let kind = if file["is_dir"].as_bool().unwrap_or(false) { "폴더" } else { "파일" };
+                let kind = if file["is_dir"].as_bool().unwrap_or(false) {
+                    "폴더"
+                } else {
+                    "파일"
+                };
                 println!("{kind}  {:>12}  {}", file["size"], text(&file["path"]));
             }
         }
@@ -93,7 +105,9 @@ fn show_result(request: &ControlRequest, data: &Value) {
                 None => println!("완료: {}", text(&payload["file_name"])),
             }
         }
-        ControlRequest::Connect { .. } | ControlRequest::Respond { .. } | ControlRequest::Cancel { .. } => {
+        ControlRequest::Connect { .. }
+        | ControlRequest::Respond { .. }
+        | ControlRequest::Cancel { .. } => {
             println!("완료")
         }
     }
@@ -105,9 +119,18 @@ fn show_peers(data: &Value) {
         println!("보이는 기기가 없습니다.");
         return;
     }
-    println!("{:<20} {:<6} {:<6} {:<8} PeerId", "이름", "연결", "페어링", "PIN");
+    println!(
+        "{:<20} {:<6} {:<6} {:<8} PeerId",
+        "이름", "연결", "페어링", "PIN"
+    );
     for peer in peers {
-        let flag = |key: &str| if peer[key].as_bool().unwrap_or(false) { "예" } else { "-" };
+        let flag = |key: &str| {
+            if peer[key].as_bool().unwrap_or(false) {
+                "예"
+            } else {
+                "-"
+            }
+        };
         println!(
             "{:<20} {:<6} {:<6} {:<8} {}",
             peer["device_name"].as_str().unwrap_or("?"),

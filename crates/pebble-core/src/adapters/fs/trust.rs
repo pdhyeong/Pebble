@@ -24,8 +24,12 @@ impl TrustStore for JsonTrustStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(AppError::io("믿는 기기 목록을 읽지 못했습니다", &e)),
         };
-        let raw: Vec<String> = serde_json::from_slice(&bytes)
-            .map_err(|e| AppError::new(crate::domain::error::ErrorCode::Internal, format!("믿는 기기 목록이 손상되었습니다: {e}")))?;
+        let raw: Vec<String> = serde_json::from_slice(&bytes).map_err(|e| {
+            AppError::new(
+                crate::domain::error::ErrorCode::Internal,
+                format!("믿는 기기 목록이 손상되었습니다: {e}"),
+            )
+        })?;
         Ok(raw.iter().filter_map(|id| PeerId::parse(id).ok()).collect())
     }
 
@@ -38,13 +42,17 @@ impl TrustStore for JsonTrustStore {
         let raw: Vec<&str> = peers.iter().map(PeerId::as_str).collect();
         let bytes = serde_json::to_vec_pretty(&raw)
             .map_err(|e| AppError::new(crate::domain::error::ErrorCode::Internal, e.to_string()))?;
-        let temp = self.path.with_extension("json.tmp");
+        let temp = self
+            .path
+            .with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4().simple()));
         fs::write(&temp, bytes)
             .await
             .map_err(|e| AppError::io("믿는 기기 목록을 저장하지 못했습니다", &e))?;
-        fs::rename(&temp, &self.path)
-            .await
-            .map_err(|e| AppError::io("믿는 기기 목록을 저장하지 못했습니다", &e))
+        let renamed = fs::rename(&temp, &self.path).await;
+        if renamed.is_err() {
+            let _ = fs::remove_file(&temp).await;
+        }
+        renamed.map_err(|e| AppError::io("믿는 기기 목록을 저장하지 못했습니다", &e))
     }
 }
 
@@ -57,7 +65,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pebble-trust-{}", uuid::Uuid::new_v4()));
         let store = JsonTrustStore::new(dir.join("nested/trusted.json"));
         assert!(store.load().await.unwrap().is_empty());
-        let peers = vec![PeerId::parse("12D3KooWA").unwrap(), PeerId::parse("12D3KooWB").unwrap()];
+        let peers = vec![
+            PeerId::parse("12D3KooWA").unwrap(),
+            PeerId::parse("12D3KooWB").unwrap(),
+        ];
         store.save(&peers).await.unwrap();
         assert_eq!(store.load().await.unwrap(), peers);
     }

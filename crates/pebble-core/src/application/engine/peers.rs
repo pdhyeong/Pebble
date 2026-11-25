@@ -1,4 +1,6 @@
-use super::{Engine, PeerSummary};
+use std::time::{Duration, Instant};
+
+use super::{Engine, PeerSummary, PendingPairing};
 use crate::application::events::UiEvent;
 use crate::application::net::{
     FileListReply, InboundId, NetCommand, PairingAsk, PairingReply, RequestKind,
@@ -10,6 +12,15 @@ use crate::domain::peer::PeerId;
 use crate::domain::transfer::TransferId;
 
 pub(super) const NOT_PAIRED: &str = "페어링이 필요합니다.";
+pub const PAIRING_EXPIRY: Duration = Duration::from_secs(170);
+pub const MAX_DEVICE_NAME_CHARS: usize = 64;
+
+pub(super) fn clip_device_name(name: String) -> String {
+    match name.char_indices().nth(MAX_DEVICE_NAME_CHARS) {
+        Some((cut, _)) => name[..cut].to_string(),
+        None => name,
+    }
+}
 
 impl Engine {
     pub(super) fn request_file_list(&self, peer: PeerId, path: String) {
@@ -44,7 +55,10 @@ impl Engine {
         self.send_net(NetCommand::RespondFileList { inbound, reply });
     }
 
-    async fn list_shared(&self, path: &str) -> Result<Vec<crate::domain::files::FileEntry>, String> {
+    async fn list_shared(
+        &self,
+        path: &str,
+    ) -> Result<Vec<crate::domain::files::FileEntry>, String> {
         let rel = RelativePath::parse(path).map_err(|e| e.message)?;
         let root = self.deps.settings.get().shared_folder;
         self.deps
@@ -92,27 +106,44 @@ impl Engine {
             return;
         };
         let shown = pin.as_str().to_string();
-        if let Some((replaced, _)) = self.pending_pairings.insert(peer.clone(), (inbound, pin)) {
-            self.reject_pairing(replaced, "새 페어링 요청으로 대체되었습니다.");
+        let pending = PendingPairing {
+            inbound,
+            pin,
+            since: Instant::now(),
+        };
+        if let Some(replaced) = self.pending_pairings.insert(peer.clone(), pending) {
+            self.reject_pairing(replaced.inbound, "새 페어링 요청으로 대체되었습니다.");
         }
-        self.device_names.insert(peer.clone(), ask.device_name.clone());
+        let device_name = clip_device_name(ask.device_name);
+        self.device_names.insert(peer.clone(), device_name.clone());
         self.emit(UiEvent::PairingRequest {
             peer_id: peer,
-            device_name: ask.device_name,
+            device_name,
             pin: shown,
         });
     }
 
     pub(super) async fn respond_pairing(&mut self, peer: PeerId, approved: bool) -> AppResult<()> {
-        let (inbound, _) = self.pending_pairings.remove(&peer).ok_or_else(|| {
+        let pending = self.pending_pairings.remove(&peer).ok_or_else(|| {
             AppError::new(ErrorCode::NotFound, "대기 중인 페어링 요청이 없습니다.")
         })?;
+        let inbound = pending.inbound;
+        if pending.since.elapsed() >= PAIRING_EXPIRY {
+            self.reject_pairing(inbound, "시간이 지나 페어링 요청이 만료되었습니다.");
+            return Err(AppError::new(
+                ErrorCode::NotFound,
+                "시간이 지나 페어링 요청이 만료되었습니다. 상대 기기에서 다시 요청하세요.",
+            ));
+        }
         if !approved {
             self.reject_pairing(inbound, "사용자가 거절했습니다.");
             return Ok(());
         }
         let settings = self.deps.settings.get();
-        self.trust(peer.clone()).await;
+        if let Err(e) = self.trust(peer.clone()).await {
+            self.reject_pairing(inbound, "상대 기기가 페어링을 저장하지 못했습니다.");
+            return Err(e);
+        }
         self.emit(UiEvent::PairingApproved {
             device_name: self.device_names.get(&peer).cloned().unwrap_or_default(),
             peer_id: peer,
@@ -128,6 +159,28 @@ impl Engine {
             },
         });
         Ok(())
+    }
+
+    pub(super) fn require_trusted(&self, peer: &PeerId) -> AppResult<()> {
+        if self.trusted.contains(peer) {
+            Ok(())
+        } else {
+            Err(AppError::new(ErrorCode::AccessDenied, NOT_PAIRED))
+        }
+    }
+
+    pub(super) fn expire_pairings(&mut self) {
+        let expired: Vec<PeerId> = self
+            .pending_pairings
+            .iter()
+            .filter(|(_, p)| p.since.elapsed() >= PAIRING_EXPIRY)
+            .map(|(peer, _)| peer.clone())
+            .collect();
+        for peer in expired {
+            if let Some(pending) = self.pending_pairings.remove(&peer) {
+                self.reject_pairing(pending.inbound, "시간이 지나 페어링 요청이 만료되었습니다.");
+            }
+        }
     }
 
     fn reject_pairing(&self, inbound: InboundId, reason: &str) {
@@ -150,11 +203,18 @@ impl Engine {
             });
             return;
         }
-        self.trust(peer.clone()).await;
-        self.device_names.insert(peer.clone(), reply.device_name.clone());
+        if let Err(e) = self.trust(peer.clone()).await {
+            self.emit(UiEvent::PairingRejected {
+                peer_id: peer,
+                error: Some(e.message),
+            });
+            return;
+        }
+        let device_name = clip_device_name(reply.device_name);
+        self.device_names.insert(peer.clone(), device_name.clone());
         self.emit(UiEvent::PairingApproved {
             peer_id: peer,
-            device_name: reply.device_name,
+            device_name,
             shared_folder_name: reply.shared_folder_name,
         });
     }
@@ -162,19 +222,29 @@ impl Engine {
     pub(super) async fn load_trusted(&mut self) {
         match self.deps.trust.load().await {
             Ok(peers) => self.trusted.extend(peers),
-            Err(e) => eprintln!("[engine] 믿는 기기 목록을 읽지 못했습니다: {e}"),
+            Err(e) => {
+                self.trust_unreadable = true;
+                eprintln!("[engine] 믿는 기기 목록을 읽지 못했습니다. 파일을 덮어쓰지 않도록 새 페어링을 막습니다: {e}");
+            }
         }
     }
 
-    async fn trust(&mut self, peer: PeerId) {
-        if !self.trusted.insert(peer) {
-            return;
+    async fn trust(&mut self, peer: PeerId) -> AppResult<()> {
+        if self.trusted.contains(&peer) {
+            return Ok(());
+        }
+        if self.trust_unreadable {
+            return Err(AppError::new(
+                ErrorCode::Io,
+                "믿는 기기 목록 파일(trusted-peers.json)을 읽지 못해 새 페어링을 저장하지 않습니다. 파일을 고치거나 지운 뒤 다시 시작하세요.",
+            ));
         }
         let mut peers: Vec<PeerId> = self.trusted.iter().cloned().collect();
+        peers.push(peer.clone());
         peers.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        if let Err(e) = self.deps.trust.save(&peers).await {
-            eprintln!("[engine] 믿는 기기 목록을 저장하지 못했습니다: {e}");
-        }
+        self.deps.trust.save(&peers).await?;
+        self.trusted.insert(peer);
+        Ok(())
     }
 
     pub(super) fn peer_summaries(&self) -> Vec<PeerSummary> {
@@ -195,7 +265,7 @@ impl Engine {
                 pending_pin: self
                     .pending_pairings
                     .get(peer)
-                    .map(|(_, pin)| pin.as_str().to_string()),
+                    .map(|p| p.pin.as_str().to_string()),
             })
             .collect()
     }
@@ -206,7 +276,8 @@ impl Engine {
         self.emit(UiEvent::ConnectionClosed {
             peer_id: peer.clone(),
         });
-        self.fail_transfers_of(&peer, "상대 기기와 연결이 끊어졌습니다.").await;
+        self.fail_transfers_of(&peer, "상대 기기와 연결이 끊어졌습니다.")
+            .await;
     }
 
     pub(super) async fn on_request_failed(

@@ -50,7 +50,9 @@ impl AppServices {
     pub async fn request_file_list(&self, peer: &str, path: String) -> AppResult<()> {
         let peer = PeerId::parse(peer)?;
         let engine = self.supervisor.engine().await?;
-        engine.send(EngineCommand::RequestFileList { peer, path }).await
+        engine
+            .send(EngineCommand::RequestFileList { peer, path })
+            .await
     }
 
     pub async fn download(&self, peer: &str, path: &str) -> AppResult<TransferId> {
@@ -62,7 +64,12 @@ impl AppServices {
             .await
     }
 
-    pub async fn upload(&self, peer: &str, file: PathBuf, remote_path: &str) -> AppResult<TransferId> {
+    pub async fn upload(
+        &self,
+        peer: &str,
+        file: PathBuf,
+        remote_path: &str,
+    ) -> AppResult<TransferId> {
         let peer = PeerId::parse(peer)?;
         let remote_dir = RelativePath::parse(remote_path)?;
         let engine = self.supervisor.engine().await?;
@@ -129,7 +136,8 @@ impl AppServices {
     }
 
     pub fn set_shared_folder_display_name(&self, name: String) {
-        self.settings.update(|s| s.shared_folder_display_name = name);
+        self.settings
+            .update(|s| s.shared_folder_display_name = name);
     }
 
     pub fn shared_folder_display_name(&self) -> String {
