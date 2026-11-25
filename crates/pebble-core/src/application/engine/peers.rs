@@ -12,6 +12,7 @@ use crate::domain::peer::PeerId;
 use crate::domain::transfer::TransferId;
 
 pub(super) const NOT_PAIRED: &str = "페어링이 필요합니다.";
+const UNPAIRED: &str = "페어링이 해제되었습니다.";
 pub const PAIRING_EXPIRY: Duration = Duration::from_secs(170);
 pub const MAX_DEVICE_NAME_CHARS: usize = 64;
 
@@ -247,6 +248,32 @@ impl Engine {
         Ok(())
     }
 
+    pub(super) async fn unpair(&mut self, peer: PeerId) -> AppResult<()> {
+        if self.trust_unreadable {
+            return Err(AppError::new(
+                ErrorCode::Io,
+                "믿는 기기 목록 파일(trusted-peers.json)을 읽지 못해 페어링 해제를 저장하지 않습니다. 파일을 고치거나 지운 뒤 다시 시작하세요.",
+            ));
+        }
+        if !self.trusted.contains(&peer) {
+            return Err(AppError::new(ErrorCode::NotFound, "믿는 기기가 아닙니다."));
+        }
+        let mut remaining: Vec<PeerId> = self
+            .trusted
+            .iter()
+            .filter(|p| **p != peer)
+            .cloned()
+            .collect();
+        remaining.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        self.deps.trust.save(&remaining).await?;
+        self.trusted.remove(&peer);
+        if let Some(pending) = self.pending_pairings.remove(&peer) {
+            self.reject_pairing(pending.inbound, UNPAIRED);
+        }
+        self.fail_transfers_of(&peer, UNPAIRED, true).await;
+        Ok(())
+    }
+
     pub(super) fn peer_summaries(&self) -> Vec<PeerSummary> {
         let mut ids: Vec<&PeerId> = self
             .connected
@@ -276,7 +303,7 @@ impl Engine {
         self.emit(UiEvent::ConnectionClosed {
             peer_id: peer.clone(),
         });
-        self.fail_transfers_of(&peer, "상대 기기와 연결이 끊어졌습니다.")
+        self.fail_transfers_of(&peer, "상대 기기와 연결이 끊어졌습니다.", false)
             .await;
     }
 

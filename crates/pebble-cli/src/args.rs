@@ -13,6 +13,7 @@ pub const USAGE: &str = "\
   pair <기기>                 페어링 요청을 보내고 상대 승인을 기다림
   accept <기기> | reject <기기>
                               나에게 온 페어링 요청을 승인/거절
+  unpair <기기>               페어링 해제 (믿는 기기에서 뺌)
   ls <기기> [경로]            상대 공유 폴더 목록
   send <파일> <기기> [폴더]   내 파일을 상대 공유 폴더로 보냄 (끝날 때까지 기다림)
   get <기기> <경로>           상대 공유 폴더의 파일을 내 다운로드 폴더로 받음
@@ -109,6 +110,9 @@ fn command(
         ("reject", 1) => ControlRequest::Respond {
             peer: arg(0, "기기")?,
             approve: false,
+        },
+        ("unpair", 1) => ControlRequest::Unpair {
+            peer: arg(0, "기기")?,
         },
         ("ls", 1 | 2) => ControlRequest::Ls {
             peer: arg(0, "기기")?,
@@ -289,5 +293,31 @@ mod tests {
         assert_eq!(opts.shared, Some(std::path::absolute("rel/share").unwrap()));
         assert_eq!(opts.downloads, Some(std::path::absolute("rel/dl").unwrap()));
         assert!(opts.tailscale);
+    }
+}
+
+#[cfg(test)]
+mod unpair_tests {
+    use super::*;
+
+    fn args(line: &str) -> Vec<String> {
+        line.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn ac_d4_1_unpair_takes_exactly_one_device() {
+        let parsed = parse(args("unpair dev")).expect("unpair <기기> 를 읽어야 합니다");
+        match parsed.command {
+            Command::Request(ControlRequest::Unpair { peer }) => assert_eq!(peer, "dev"),
+            _ => panic!("Unpair 요청이어야 합니다"),
+        }
+        for line in ["unpair", "unpair a b"] {
+            assert!(parse(args(line)).is_err(), "{line}");
+        }
+    }
+
+    #[test]
+    fn ac_d4_1_usage_lists_unpair() {
+        assert!(USAGE.contains("unpair <기기>"));
     }
 }

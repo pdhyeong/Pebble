@@ -238,6 +238,11 @@ async fn dispatch(
             services.cancel(transfer).await?;
             Ok(Value::Null)
         }
+        ControlRequest::Unpair { peer } => {
+            let peer = resolve_peer(services, &peer).await?;
+            services.unpair(peer.as_str()).await?;
+            Ok(Value::Null)
+        }
     }
 }
 
@@ -531,6 +536,7 @@ mod tests {
         net: mpsc::Sender<NetEvent>,
         cmds: mpsc::UnboundedReceiver<NetCommand>,
         hub: Arc<EventHub>,
+        root: PathBuf,
     }
 
     async fn fixture(started: bool) -> Fixture {
@@ -584,6 +590,7 @@ mod tests {
             net,
             cmds,
             hub,
+            root,
         }
     }
 
@@ -1210,6 +1217,109 @@ mod tests {
         assert_eq!(reply["type"], "error");
         assert_eq!(reply["code"], "INTERNAL");
         drop(idle);
+        task.abort();
+    }
+
+    async fn trust_via_pairing_request(f: &Fixture, id: &str) {
+        use crate::application::net::{InboundId, InboundRequest, PairingAsk};
+        f.net
+            .send(NetEvent::Inbound {
+                peer: pid(id),
+                id: InboundId(41),
+                request: InboundRequest::Pairing(PairingAsk {
+                    device_name: "paired".into(),
+                    pin: "123456".into(),
+                }),
+            })
+            .await
+            .unwrap();
+        within("대기 PIN", async {
+            loop {
+                let peers = f.services.peers().await.unwrap();
+                if peers
+                    .iter()
+                    .any(|p| p.peer_id.as_str() == id && p.pending_pin.is_some())
+                {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        f.services.respond_pairing(id, true).await.unwrap();
+    }
+
+    fn trusted_file(f: &Fixture) -> PathBuf {
+        f.root.join("trusted.json")
+    }
+
+    async fn is_trusted(f: &Fixture, id: &str) -> bool {
+        f.services
+            .peers()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.peer_id.as_str() == id && p.trusted)
+    }
+
+    #[tokio::test]
+    async fn ac_d4_5_unpair_by_name_replies_ok_null_untrusts_and_rewrites_the_file() {
+        let f = two_peers().await;
+        trust_via_pairing_request(&f, P1).await;
+        let file = trusted_file(&f);
+        assert!(std::fs::read_to_string(&file).unwrap().contains(P1));
+        assert!(is_trusted(&f, P1).await);
+        let (path, task) = serve_fixture(&f).await;
+        let replies = call(&path, r#"{"cmd":"unpair","peer":"paired"}"#).await;
+        assert_eq!(replies.len(), 1, "{replies:?}");
+        assert_eq!(replies[0]["type"], "ok", "{replies:?}");
+        assert!(replies[0]["data"].is_null(), "{replies:?}");
+        assert!(!is_trusted(&f, P1).await);
+        assert!(!std::fs::read_to_string(&file).unwrap().contains(P1));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn ac_d4_5_unpair_of_a_connected_but_untrusted_device_is_not_found() {
+        let f = two_peers().await;
+        let (path, task) = serve_fixture(&f).await;
+        let replies = call(&path, r#"{"cmd":"unpair","peer":"beta"}"#).await;
+        assert_eq!(replies.len(), 1, "{replies:?}");
+        assert_eq!(replies[0]["type"], "error", "{replies:?}");
+        assert_eq!(replies[0]["code"], "NOT_FOUND", "{replies:?}");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn ac_d4_5_unpair_of_an_unknown_name_is_not_found() {
+        let f = two_peers().await;
+        let (path, task) = serve_fixture(&f).await;
+        let replies = call(&path, r#"{"cmd":"unpair","peer":"nobody"}"#).await;
+        assert_eq!(replies[0]["type"], "error", "{replies:?}");
+        assert_eq!(replies[0]["code"], "NOT_FOUND", "{replies:?}");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn ac_d4_5_unpair_with_two_devices_of_the_same_name_is_invalid_peer_id() {
+        let f = fixture(true).await;
+        connect_peer(&f, P1, "twin").await;
+        connect_peer(&f, P2, "twin").await;
+        let (path, task) = serve_fixture(&f).await;
+        let replies = call(&path, r#"{"cmd":"unpair","peer":"twin"}"#).await;
+        assert_eq!(replies[0]["type"], "error", "{replies:?}");
+        assert_eq!(replies[0]["code"], "INVALID_PEER_ID", "{replies:?}");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn ac_d4_5_unpair_while_the_engine_is_off_is_p2p_not_running() {
+        let f = fixture(false).await;
+        let (path, task) = serve_fixture(&f).await;
+        let raw = format!(r#"{{"cmd":"unpair","peer":"{P1}"}}"#);
+        let replies = call(&path, &raw).await;
+        assert_eq!(replies[0]["type"], "error", "{replies:?}");
+        assert_eq!(replies[0]["code"], "P2P_NOT_RUNNING", "{replies:?}");
         task.abort();
     }
 }

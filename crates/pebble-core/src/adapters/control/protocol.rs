@@ -35,6 +35,9 @@ pub enum ControlRequest {
     Cancel {
         transfer: String,
     },
+    Unpair {
+        peer: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,5 +76,20 @@ mod tests {
         let json = serde_json::to_value(reply).unwrap();
         assert_eq!(json["type"], "error");
         assert_eq!(json["code"], "P2P_NOT_RUNNING");
+    }
+}
+
+#[cfg(test)]
+mod unpair_tests {
+    use super::*;
+
+    #[test]
+    fn ac_d4_2_unpair_command_round_trips_in_kebab_case() {
+        let parsed: ControlRequest =
+            serde_json::from_str(r#"{"cmd":"unpair","peer":"x"}"#).unwrap();
+        assert!(matches!(parsed, ControlRequest::Unpair { ref peer } if peer == "x"));
+        let json = serde_json::to_value(ControlRequest::Unpair { peer: "x".into() }).unwrap();
+        assert_eq!(json["cmd"], "unpair");
+        assert_eq!(json["peer"], "x");
     }
 }

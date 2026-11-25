@@ -121,6 +121,14 @@ impl AppServices {
             .await
     }
 
+    pub async fn unpair(&self, peer: &str) -> AppResult<()> {
+        let peer = PeerId::parse(peer)?;
+        let engine = self.supervisor.engine().await?;
+        engine
+            .ask(|reply| EngineCommand::Unpair { peer, reply })
+            .await
+    }
+
     pub fn set_device_name(&self, name: String) {
         self.settings.update(|s| s.device_name = name);
     }

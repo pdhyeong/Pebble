@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use super::events::UiEvent;
 use super::net::{InboundId, InboundRequest, NetCommand, NetEvent};
@@ -20,7 +20,7 @@ use crate::domain::pairing::Pin;
 use crate::domain::path::RelativePath;
 use crate::domain::peer::PeerId;
 use crate::domain::transfer::{Direction, TransferId, TransferStatus};
-use transfers::{Incoming, Outgoing, PendingPull, STALL_TIMEOUT};
+use transfers::{Committing, Incoming, Outgoing, PendingPull, STALL_TIMEOUT};
 
 pub const COMMAND_BUFFER: usize = 64;
 const FINISHED_MEMORY: usize = 256;
@@ -66,6 +66,10 @@ pub enum EngineCommand {
     RespondPairing {
         peer: PeerId,
         approved: bool,
+        reply: Reply<()>,
+    },
+    Unpair {
+        peer: PeerId,
         reply: Reply<()>,
     },
     FolderChanged,
@@ -152,6 +156,8 @@ pub fn spawn_engine(
         outgoing: HashMap::new(),
         incoming: HashMap::new(),
         pulls: HashMap::new(),
+        commits: JoinSet::new(),
+        committing: HashMap::new(),
     };
     let task = tokio::spawn(engine.run(inbox, net_events));
     (
@@ -183,6 +189,8 @@ struct Engine {
     outgoing: HashMap<TransferId, Outgoing>,
     incoming: HashMap<TransferId, Incoming>,
     pulls: HashMap<TransferId, PendingPull>,
+    commits: JoinSet<(TransferId, AppResult<PathBuf>)>,
+    committing: HashMap<TransferId, Committing>,
 }
 
 impl Engine {
@@ -199,6 +207,9 @@ impl Engine {
                     self.sweep_stalled().await;
                     self.expire_pairings();
                 }
+                Some(joined) = self.commits.join_next_with_id(), if !self.commits.is_empty() => {
+                    self.on_commit_joined(joined);
+                }
                 command = inbox.recv() => match command {
                     None | Some(EngineCommand::Shutdown) => break "P2P 엔진이 종료되었습니다.",
                     Some(command) => self.on_command(command).await,
@@ -213,6 +224,7 @@ impl Engine {
             }
         };
         self.abort_all_transfers().await;
+        self.drain_commits().await;
         self.send_net(NetCommand::Shutdown);
         self.emit(UiEvent::P2pStopped {
             message: reason.to_string(),
@@ -251,6 +263,9 @@ impl Engine {
                 reply,
             } => {
                 let _ = reply.send(self.respond_pairing(peer, approved).await);
+            }
+            EngineCommand::Unpair { peer, reply } => {
+                let _ = reply.send(self.unpair(peer).await);
             }
             EngineCommand::FolderChanged => {}
             EngineCommand::Shutdown => {}
@@ -356,6 +371,7 @@ impl Engine {
     fn transfer_state(&self, id: &TransferId) -> TransferState {
         if self.outgoing.contains_key(id)
             || self.incoming.contains_key(id)
+            || self.committing.contains_key(id)
             || self.pulls.contains_key(id)
         {
             return TransferState::Active;

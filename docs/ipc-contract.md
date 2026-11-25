@@ -113,7 +113,7 @@ type Direction = "upload" | "download";
 - 한 메시지 최대 크기: JSON 8 MiB, 스트림 1 MiB + 64 KiB. 넘으면 읽기 전에 끊는다.
 - 스트림 `Init` 에는 `for_pull`(다운로드 요청에 대한 응답인지)이 들어 있다. 요청하지 않았거나 이미 취소한 다운로드의 `Init` 은 거절한다.
 - 조각 크기는 마지막 조각을 빼고 정확히 1 MiB 여야 한다. 크기가 다르면 그 전송은 실패한다.
-- 기본 포트는 TCP·UDP 47123 이다. 기기 키는 설정 폴더 `identity.key` 에 남아서 PeerId 가 바뀌지 않는다. 페어링은 `trusted-peers.json` 에 남는다.
+- 기본 포트는 TCP·UDP 47123 이다. 기기 키는 설정 폴더 `identity.key` 에 남아서 PeerId 가 바뀌지 않는다. 페어링은 `trusted-peers.json` 에 남는다. CLI `unpair` 로 뺄 수 있다(Tauri 명령·이벤트는 없다).
 - `trusted-peers.json` 을 읽지 못하면(손상·권한) 그 파일을 덮어쓰지 않도록 새 페어링 저장을 막는다. 파일을 고치거나 지우고 다시 시작한다.
 - 상대가 보낸 기기 이름은 64자까지만 쓴다.
 - CLI 연결 통로는 `docs/cli.md` 를 본다.

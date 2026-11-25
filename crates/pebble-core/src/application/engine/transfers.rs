@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::peers::NOT_PAIRED;
@@ -17,6 +17,7 @@ const ENGINE_STOPPED: &str = "P2P 엔진이 종료되어 전송을 멈췄습니�
 const STALLED: &str = "상대 기기가 응답하지 않아 전송을 멈췄습니다.";
 pub(super) const STALL_TIMEOUT: Duration = Duration::from_secs(120);
 const EARLY_CANCEL_LIMIT: usize = 256;
+const COMMIT_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) struct Outgoing {
     peer: PeerId,
@@ -33,6 +34,15 @@ pub(super) struct Incoming {
     counter: ChunkCounter,
     started: Instant,
     touched: Instant,
+}
+
+pub(super) struct Committing {
+    pub(super) inbound: InboundId,
+    pub(super) peer: PeerId,
+    pub(super) file_name: String,
+    pub(super) size: u64,
+    pub(super) started: Instant,
+    pub(super) task: tokio::task::Id,
 }
 
 pub(super) struct PendingPull {
@@ -260,7 +270,7 @@ impl Engine {
         total_size: u64,
         upload_dir: Option<&str>,
     ) {
-        if self.incoming.contains_key(&transfer_id) {
+        if self.incoming.contains_key(&transfer_id) || self.committing.contains_key(&transfer_id) {
             self.ack(
                 inbound,
                 transfer_id,
@@ -332,12 +342,7 @@ impl Engine {
                 touched: Instant::now(),
             },
         );
-        let result = if complete {
-            self.finish_incoming(&transfer_id).await
-        } else {
-            Ok(())
-        };
-        self.ack(inbound, transfer_id, result);
+        self.commit_or_ack(inbound, transfer_id, complete);
     }
 
     async fn open_incoming(
@@ -416,28 +421,82 @@ impl Engine {
             total_size: total,
             progress: percent,
         });
-        let result = if complete {
-            self.finish_incoming(&transfer_id).await
-        } else {
-            Ok(())
-        };
-        self.ack(inbound, transfer_id, result);
+        self.commit_or_ack(inbound, transfer_id, complete);
     }
 
-    async fn finish_incoming(&mut self, transfer_id: &TransferId) -> Result<(), String> {
+    fn commit_or_ack(&mut self, inbound: InboundId, transfer_id: TransferId, complete: bool) {
+        if !complete {
+            self.ack(inbound, transfer_id, Ok(()));
+            return;
+        }
+        if let Err(error) = self.begin_commit(inbound, &transfer_id) {
+            self.ack(inbound, transfer_id, Err(error));
+        }
+    }
+
+    fn begin_commit(&mut self, inbound: InboundId, transfer_id: &TransferId) -> Result<(), String> {
         let Some(t) = self.incoming.remove(transfer_id) else {
             return Err("전송 세션을 찾을 수 없습니다.".to_string());
         };
-        let size = t.counter.total_size();
-        match t.sink.commit().await {
+        let id = transfer_id.clone();
+        let sink = t.sink;
+        let task = self
+            .commits
+            .spawn(async move { (id, sink.commit().await) })
+            .id();
+        self.committing.insert(
+            transfer_id.clone(),
+            Committing {
+                inbound,
+                peer: t.peer,
+                file_name: t.file_name,
+                size: t.counter.total_size(),
+                started: t.started,
+                task,
+            },
+        );
+        Ok(())
+    }
+
+    pub(super) fn on_commit_joined(
+        &mut self,
+        joined: Result<(tokio::task::Id, (TransferId, AppResult<PathBuf>)), tokio::task::JoinError>,
+    ) {
+        match joined {
+            Ok((_, (id, result))) => self.on_commit_done(&id, result),
+            Err(e) => {
+                let Some(id) = self
+                    .committing
+                    .iter()
+                    .find(|(_, c)| c.task == e.id())
+                    .map(|(id, _)| id.clone())
+                else {
+                    return;
+                };
+                self.on_commit_done(
+                    &id,
+                    Err(AppError::new(
+                        ErrorCode::Internal,
+                        "파일 저장 중 오류가 발생했습니다.",
+                    )),
+                );
+            }
+        }
+    }
+
+    fn on_commit_done(&mut self, transfer_id: &TransferId, result: AppResult<PathBuf>) {
+        let Some(t) = self.committing.remove(transfer_id) else {
+            return;
+        };
+        let outcome = match result {
             Ok(saved) => {
-                let speed = speed_bps(size, t.started.elapsed());
+                let speed = speed_bps(t.size, t.started.elapsed());
                 self.emit(UiEvent::TransferCompleted {
                     transfer_id: transfer_id.clone(),
                     direction: Direction::Download,
                     peer_id: t.peer.clone(),
                     file_name: t.file_name.clone(),
-                    total_size: size,
+                    total_size: t.size,
                     saved_path: Some(saved.display().to_string()),
                     speed_bps: speed,
                 });
@@ -445,7 +504,7 @@ impl Engine {
                     Direction::Download,
                     &t.peer,
                     &t.file_name,
-                    size,
+                    t.size,
                     TransferStatus::Completed,
                     speed,
                 );
@@ -463,12 +522,35 @@ impl Engine {
                     Direction::Download,
                     &t.peer,
                     &t.file_name,
-                    size,
+                    t.size,
                     TransferStatus::Failed,
                     None,
                 );
                 Err(e.message)
             }
+        };
+        self.ack(t.inbound, transfer_id.clone(), outcome);
+    }
+
+    pub(super) async fn drain_commits(&mut self) {
+        let drained = tokio::time::timeout(COMMIT_DRAIN_TIMEOUT, async {
+            while let Some(joined) = self.commits.join_next_with_id().await {
+                self.on_commit_joined(joined);
+            }
+        })
+        .await;
+        if drained.is_ok() {
+            return;
+        }
+        self.commits.abort_all();
+        while let Some(joined) = self.commits.join_next_with_id().await {
+            if joined.is_ok() {
+                self.on_commit_joined(joined);
+            }
+        }
+        let unfinished: Vec<TransferId> = self.committing.keys().cloned().collect();
+        for id in unfinished {
+            self.on_commit_done(&id, Err(AppError::new(ErrorCode::Io, ENGINE_STOPPED)));
         }
     }
 
@@ -567,7 +649,12 @@ impl Engine {
             .await;
     }
 
-    pub(super) async fn fail_transfers_of(&mut self, peer: &PeerId, error: &str) {
+    pub(super) async fn fail_transfers_of(
+        &mut self,
+        peer: &PeerId,
+        error: &str,
+        notify_peer: bool,
+    ) {
         let ids: Vec<TransferId> = self
             .outgoing
             .iter()
@@ -587,13 +674,14 @@ impl Engine {
             )
             .collect();
         for id in ids {
-            self.end_transfer(&id, Ending::Failed(error.to_string()), false, None)
+            self.end_transfer(&id, Ending::Failed(error.to_string()), notify_peer, None)
                 .await;
         }
     }
 
     fn remember_early_cancel(&mut self, transfer_id: &TransferId, peer: &PeerId) {
         let known = self.incoming.contains_key(transfer_id)
+            || self.committing.contains_key(transfer_id)
             || self.outgoing.contains_key(transfer_id)
             || self.pulls.contains_key(transfer_id);
         if known {
@@ -864,6 +952,8 @@ mod mutants_d {
             outgoing: HashMap::new(),
             incoming: HashMap::new(),
             pulls: HashMap::new(),
+            commits: tokio::task::JoinSet::new(),
+            committing: HashMap::new(),
         };
         (engine, ui, cmds)
     }
@@ -978,5 +1068,51 @@ mod mutants_d {
             "멈춘 전송을 주기적으로 정리하지 않음"
         );
         task.abort();
+    }
+
+    async fn committing(started: Instant) -> Committing {
+        Committing {
+            inbound: InboundId(5),
+            peer: PeerId::parse(PEER_A).unwrap(),
+            file_name: "f.txt".into(),
+            size: 10,
+            started,
+            task: tokio::spawn(async {}).id(),
+        }
+    }
+
+    #[tokio::test]
+    async fn ac_d1_sweep_never_fails_a_committing_transfer() {
+        let (mut e, ui, mut cmds) = engine();
+        let stale = Instant::now()
+            .checked_sub(STALL_TIMEOUT + Duration::from_secs(5))
+            .unwrap();
+        e.committing.insert(tid("c"), committing(stale).await);
+        e.sweep_stalled().await;
+        assert!(e.committing.contains_key(&tid("c")));
+        assert_eq!(ui.count("transfer-failed"), 0);
+        assert!(cmds.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn ac_d1_on_init_rejects_an_id_that_is_still_committing() {
+        let (mut e, ui, mut cmds) = engine();
+        e.committing
+            .insert(tid("c"), committing(Instant::now()).await);
+        let peer = PeerId::parse(PEER_A).unwrap();
+        e.on_init(peer, InboundId(9), tid("c"), "f.txt".into(), 4, Some("/"))
+            .await;
+        match cmds.try_recv() {
+            Ok(NetCommand::RespondStream { inbound, ack }) => {
+                assert_eq!(inbound, InboundId(9));
+                assert_eq!(
+                    ack.result,
+                    Err("이미 진행 중인 전송 ID 입니다.".to_string())
+                );
+            }
+            other => panic!("중복 Init 에 대한 거절 ack 가 없음: {other:?}"),
+        }
+        assert!(e.incoming.is_empty());
+        assert_eq!(ui.count("transfer-started"), 0);
     }
 }

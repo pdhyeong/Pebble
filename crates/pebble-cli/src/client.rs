@@ -109,7 +109,8 @@ fn show_result(request: &ControlRequest, data: &Value) {
         }
         ControlRequest::Connect { .. }
         | ControlRequest::Respond { .. }
-        | ControlRequest::Cancel { .. } => {
+        | ControlRequest::Cancel { .. }
+        | ControlRequest::Unpair { .. } => {
             println!("완료")
         }
     }

@@ -87,3 +87,29 @@ mod mutants_d {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+#[cfg(test)]
+mod unpair_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ac_d4_3_saving_a_shorter_list_drops_the_removed_peer_and_leaves_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("pebble-trust-un-{}", uuid::Uuid::new_v4()));
+        let store = JsonTrustStore::new(dir.join("trusted.json"));
+        let a = PeerId::parse("12D3KooWA").unwrap();
+        let b = PeerId::parse("12D3KooWB").unwrap();
+        store.save(&[a.clone(), b.clone()]).await.unwrap();
+        store.save(std::slice::from_ref(&b)).await.unwrap();
+        assert_eq!(store.load().await.unwrap(), vec![b]);
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "임시 파일이 남음: {leftovers:?}");
+        let raw = std::fs::read_to_string(dir.join("trusted.json")).unwrap();
+        assert!(!raw.contains(a.as_str()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

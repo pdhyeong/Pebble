@@ -430,3 +430,39 @@ fn saved_path_from_a_peer_cannot_drive_the_terminal() {
         "{text:?}"
     );
 }
+
+#[test]
+fn ac_d4_6_unpair_prints_done_and_sends_the_unpair_request() {
+    let dir = scratch();
+    let server = fake_server(&dir, vec![ok("null")]);
+    let o = run_cli(&dir, &["unpair", "d"]);
+    let request = server.join().unwrap();
+    assert!(request.contains(r#""cmd":"unpair""#), "{request}");
+    assert!(request.contains(r#""peer":"d""#), "{request}");
+    assert_eq!(out(&o).trim(), "완료");
+    assert_eq!(o.status.code(), Some(0));
+}
+
+#[test]
+fn ac_d4_6_unpair_error_reply_is_reported_in_text_and_silent_in_json() {
+    let reply =
+        r#"{"type":"error","code":"NOT_FOUND","message":"믿는 기기가 아닙니다."}"#.to_string();
+    let dir = scratch();
+    let server = fake_server(&dir, vec![reply.clone()]);
+    let o = run_cli(&dir, &["unpair", "x"]);
+    server.join().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        err(&o).contains("오류: 믿는 기기가 아닙니다. (NOT_FOUND)"),
+        "{}",
+        err(&o)
+    );
+
+    let dir = scratch();
+    let server = fake_server(&dir, vec![reply.clone()]);
+    let o = run_cli(&dir, &["unpair", "x", "--json"]);
+    server.join().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(err(&o), "");
+    assert_eq!(out(&o), format!("{reply}\n"));
+}
