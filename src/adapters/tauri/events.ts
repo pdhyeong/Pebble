@@ -10,7 +10,11 @@ export interface Subscription {
 
 function toUnsubscribe(pending: Promise<UnlistenFn>): Unsubscribe {
   return () => {
-    pending.then((unlisten) => unlisten()).catch(() => undefined);
+    pending
+      .then((unlisten) => unlisten())
+      .catch((e) => {
+        console.error("이벤트 구독 해제 실패:", e);
+      });
   };
 }
 

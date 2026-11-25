@@ -82,19 +82,32 @@ impl FileName {
 
     pub fn partial(&self, tag: &str) -> String {
         let room = MAX_FILE_NAME_BYTES.saturating_sub(tag.len() + PARTIAL_OVERHEAD);
-        let mut cut = self.0.len().min(room);
-        while !self.0.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        format!(".{}.{tag}.part", &self.0[..cut])
+        format!(".{}.{tag}.part", clip(&self.0, room))
     }
 
     pub fn numbered(&self, n: u32) -> Self {
+        let mark = format!(" ({n})");
         match self.0.rsplit_once('.') {
-            Some((stem, ext)) if !stem.is_empty() => Self(format!("{stem} ({n}).{ext}")),
-            _ => Self(format!("{} ({n})", self.0)),
+            Some((stem, ext))
+                if !stem.is_empty() && mark.len() + 1 + ext.len() < MAX_FILE_NAME_BYTES =>
+            {
+                let room = MAX_FILE_NAME_BYTES - mark.len() - 1 - ext.len();
+                Self(format!("{}{mark}.{ext}", clip(stem, room)))
+            }
+            _ => {
+                let room = MAX_FILE_NAME_BYTES - mark.len();
+                Self(format!("{}{mark}", clip(&self.0, room)))
+            }
         }
     }
+}
+
+fn clip(text: &str, max_bytes: usize) -> &str {
+    let mut cut = text.len().min(max_bytes);
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &text[..cut]
 }
 
 const MAX_FILE_NAME_BYTES: usize = 255;
@@ -116,6 +129,47 @@ fn invalid_path(raw: &str) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numbered_names_stay_within_the_os_limit() {
+        let ascii = FileName::parse(&format!("{}.txt", "a".repeat(251))).unwrap();
+        let wide = FileName::parse(&format!("{}.txt", "가".repeat(83))).unwrap();
+        let bare = FileName::parse(&"b".repeat(255)).unwrap();
+        for (name, n, tail) in [
+            (&ascii, 1, " (1).txt"),
+            (&wide, 12, " (12).txt"),
+            (&bare, 999, " (999)"),
+        ] {
+            let numbered = name.numbered(n);
+            assert!(
+                numbered.as_str().len() <= 255,
+                "{}",
+                numbered.as_str().len()
+            );
+            assert!(numbered.as_str().ends_with(tail), "{}", numbered.as_str());
+            assert!(FileName::parse(numbered.as_str()).is_ok());
+        }
+        let short = FileName::parse("s.txt").unwrap();
+        assert_eq!(short.numbered(2).as_str(), "s (2).txt");
+    }
+
+    #[test]
+    fn numbered_names_with_long_extensions_stay_valid_and_distinct() {
+        for raw in [
+            format!(".{}", "e".repeat(254)),
+            format!("a.{}", "e".repeat(253)),
+        ] {
+            let name = FileName::parse(&raw).unwrap();
+            let picks: Vec<String> = (1..=3)
+                .map(|n| name.numbered(n).as_str().to_string())
+                .collect();
+            for pick in &picks {
+                assert!(pick.len() <= 255, "{}", pick.len());
+                assert!(FileName::parse(pick).is_ok(), "{pick}");
+            }
+            assert!(picks[0] != picks[1] && picks[1] != picks[2] && picks[0] != picks[2]);
+        }
+    }
 
     #[test]
     fn parse_normalizes_slashes_and_dots() {

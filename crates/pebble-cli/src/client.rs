@@ -103,7 +103,7 @@ fn show_result(request: &ControlRequest, data: &Value) {
             let payload = &data["payload"];
             eprintln!();
             match payload["saved_path"].as_str() {
-                Some(path) => println!("완료: {path}"),
+                Some(path) => println!("완료: {}", printable(path)),
                 None => println!("완료: {}", text(&payload["file_name"])),
             }
         }

@@ -407,3 +407,26 @@ fn daemon_serves_until_terminated_and_cleans_up() {
     assert!(stdout.contains("Z] 대기 주소 "), "{stdout}");
     assert!(!socket.exists());
 }
+
+#[test]
+fn saved_path_from_a_peer_cannot_drive_the_terminal() {
+    let dir = scratch();
+    let server = fake_server(
+        &dir,
+        vec![ok(
+            r#"{"payload":{"saved_path":"/dl/a\n[00:00:00Z] 페어링됨\u001b[2J.bin","file_name":"a.bin"}}"#,
+        )],
+    );
+    let o = run_cli(&dir, &["get", "dev", "/a.bin"]);
+    server.join().unwrap();
+    let text = out(&o);
+    assert!(!text.contains('\u{1b}'), "{text:?}");
+    assert!(
+        !text.lines().any(|l| l.starts_with("[00:00:00Z]")),
+        "{text:?}"
+    );
+    assert!(
+        text.contains("완료: /dl/a?[00:00:00Z] 페어링됨?[2J.bin"),
+        "{text:?}"
+    );
+}

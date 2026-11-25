@@ -887,6 +887,133 @@ mod tests {
         assert_eq!(forwarded[1]["payload"]["transfer_id"], "mine");
     }
 
+    async fn trust_and_receive(f: &Fixture, id: &str) {
+        let peer = PeerId::parse(P1).unwrap();
+        f.net
+            .send(NetEvent::Inbound {
+                peer: peer.clone(),
+                id: crate::application::net::InboundId(1),
+                request: crate::application::net::InboundRequest::Pairing(
+                    crate::application::net::PairingAsk {
+                        device_name: "alpha".into(),
+                        pin: "123456".into(),
+                    },
+                ),
+            })
+            .await
+            .unwrap();
+        within("페어링 승인", async {
+            while f.services.respond_pairing(P1, true).await.is_err() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        f.net
+            .send(NetEvent::Inbound {
+                peer,
+                id: crate::application::net::InboundId(2),
+                request: crate::application::net::InboundRequest::Stream(
+                    crate::application::net::StreamMsg::Init {
+                        transfer_id: tid(id),
+                        file_name: format!("{id}.bin"),
+                        total_size: 10,
+                        remote_path: "/".into(),
+                        for_pull: false,
+                    },
+                ),
+            })
+            .await
+            .unwrap();
+        wait_state(f, id, |s| matches!(s, TransferState::Active)).await;
+    }
+
+    async fn cancel_incoming(f: &Fixture, id: &str) {
+        f.net
+            .send(NetEvent::Inbound {
+                peer: PeerId::parse(P1).unwrap(),
+                id: crate::application::net::InboundId(3),
+                request: crate::application::net::InboundRequest::Stream(
+                    crate::application::net::StreamMsg::Cancel {
+                        transfer_id: tid(id),
+                    },
+                ),
+            })
+            .await
+            .unwrap();
+        wait_state(f, id, |s| matches!(s, TransferState::Ended(_))).await;
+    }
+
+    async fn wait_state(f: &Fixture, id: &str, ready: impl Fn(&TransferState) -> bool) {
+        within("전송 상태", async {
+            while !ready(&f.services.transfer_state(&tid(id)).await.unwrap()) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    }
+
+    fn lagging(events: Vec<UiEvent>) -> (broadcast::Sender<UiEvent>, broadcast::Receiver<UiEvent>) {
+        let (tx, rx) = broadcast::channel(1);
+        for e in events {
+            tx.send(e).unwrap();
+        }
+        (tx, rx)
+    }
+
+    async fn follow(f: &Fixture, rx: &mut broadcast::Receiver<UiEvent>) -> AppResult<Value> {
+        let (_client, server) = UnixStream::pair().unwrap();
+        let (_read, mut write) = server.into_split();
+        follow_transfer(&f.services, rx, &mut write, &tid("mine")).await
+    }
+
+    #[tokio::test]
+    async fn follow_transfer_recovers_an_ending_it_missed_while_lagging() {
+        let f = fixture(true).await;
+        trust_and_receive(&f, "mine").await;
+        cancel_incoming(&f, "mine").await;
+        let (_tx, mut rx) = lagging(vec![progress("theirs"), progress("theirs")]);
+        let outcome = within("놓친 끝 되찾기", follow(&f, &mut rx)).await;
+        assert_eq!(outcome.unwrap_err().message, "전송이 취소되었습니다.");
+    }
+
+    #[tokio::test]
+    async fn follow_transfer_keeps_waiting_after_a_lag_while_the_transfer_runs() {
+        let f = fixture(true).await;
+        trust_and_receive(&f, "mine").await;
+        let (_tx, mut rx) = lagging(vec![
+            progress("theirs"),
+            progress("theirs"),
+            completed("mine"),
+        ]);
+        let outcome = within("밀린 뒤 계속 기다리기", follow(&f, &mut rx)).await;
+        assert_eq!(outcome.unwrap()["payload"]["file_name"], "mine.bin");
+    }
+
+    #[tokio::test]
+    async fn follow_transfer_gives_up_on_a_transfer_the_engine_never_had() {
+        let f = fixture(true).await;
+        let (_tx, mut rx) = lagging(vec![progress("theirs"), progress("theirs")]);
+        let err = within("모르는 전송", follow(&f, &mut rx))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::NotFound);
+    }
+
+    #[tokio::test]
+    async fn follow_transfer_checks_the_engine_on_its_own_when_events_stop() {
+        let f = fixture(true).await;
+        trust_and_receive(&f, "mine").await;
+        cancel_incoming(&f, "mine").await;
+        let (_tx, mut rx) = broadcast::channel::<UiEvent>(8);
+        tokio::time::pause();
+        let started = tokio::time::Instant::now();
+        let outcome = tokio::time::timeout(TRANSFER_CHECK * 2, follow(&f, &mut rx))
+            .await
+            .expect("점검 틱이 오지 않음");
+        assert_eq!(outcome.unwrap_err().message, "전송이 취소되었습니다.");
+        assert!(started.elapsed() >= TRANSFER_CHECK);
+    }
+
     #[tokio::test]
     async fn follow_transfer_reports_our_failure_only() {
         let (outcome, _) = run_follow(vec![
