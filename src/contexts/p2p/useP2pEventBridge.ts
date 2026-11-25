@@ -21,9 +21,13 @@ export function useP2pEventBridge(dispatch: Dispatch<P2pAction>, onSubscribed: (
       }
     });
 
-    subscription.ready.then(() => {
-      if (active) onSubscribed();
-    });
+    subscription.ready
+      .catch((e) => {
+        console.error("이벤트 구독 일부 실패:", e);
+      })
+      .then(() => {
+        if (active) onSubscribed();
+      });
 
     return () => {
       active = false;

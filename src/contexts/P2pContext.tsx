@@ -23,8 +23,8 @@ export function P2pProvider({ children }: { children: ReactNode }) {
     <P2pContext.Provider
       value={{
         ...state,
-        isDownloading: hasActiveTransfer(state, "download"),
-        isUploading: hasActiveTransfer(state, "upload"),
+        isDownloading: actions.pendingDownloads > 0 || hasActiveTransfer(state, "download"),
+        isUploading: actions.pendingUploads > 0 || hasActiveTransfer(state, "upload"),
         ...actions,
       }}
     >

@@ -73,3 +73,17 @@ mod tests {
         assert_eq!(store.load().await.unwrap(), peers);
     }
 }
+
+#[cfg(test)]
+mod mutants_d {
+    use super::*;
+
+    #[tokio::test]
+    async fn unreadable_list_is_an_error_not_an_empty_list() {
+        let dir = std::env::temp_dir().join(format!("pebble-trust-dir-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = JsonTrustStore::new(dir.clone());
+        assert!(store.load().await.is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

@@ -53,3 +53,14 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod mutants_d {
+    use super::*;
+
+    #[test]
+    fn display_shows_the_id() {
+        let id = PeerId::parse("12D3KooWA").unwrap();
+        assert_eq!(id.to_string(), "12D3KooWA");
+    }
+}

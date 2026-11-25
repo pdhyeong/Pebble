@@ -264,6 +264,7 @@ impl ChunkSink for PartFile {
 }
 
 async fn claim_free_name(part_path: &Path, dir: &Path, name: &FileName) -> AppResult<PathBuf> {
+    let mut links_work = true;
     for n in 0..MAX_NAME_ATTEMPTS {
         let candidate = if n == 0 {
             name.clone()
@@ -271,30 +272,41 @@ async fn claim_free_name(part_path: &Path, dir: &Path, name: &FileName) -> AppRe
             name.numbered(n)
         };
         let final_path = dir.join(candidate.as_str());
-        match fs::hard_link(part_path, &final_path).await {
-            Ok(()) => return Ok(final_path),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return move_without_link(part_path, &final_path, e).await,
+        if links_work {
+            match fs::hard_link(part_path, &final_path).await {
+                Ok(()) => return Ok(final_path),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => links_work = false,
+            }
+        }
+        if move_without_link(part_path, &final_path).await? {
+            return Ok(final_path);
         }
     }
     Err(AppError::new(
         ErrorCode::Io,
-        "같은 이름의 파일이 너무 많습니다.",
+        format!("같은 이름 파일이 너무 많습니다: {}", name.as_str()),
     ))
 }
 
-async fn move_without_link(
-    part_path: &Path,
-    final_path: &Path,
-    link_error: std::io::Error,
-) -> AppResult<PathBuf> {
-    if fs::try_exists(final_path).await.unwrap_or(true) {
-        return Err(AppError::io("받은 파일을 옮기지 못했습니다", &link_error));
+async fn move_without_link(part_path: &Path, final_path: &Path) -> AppResult<bool> {
+    let placeholder = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(final_path)
+        .await;
+    match placeholder {
+        Ok(file) => drop(file),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(e) => return Err(AppError::io("받은 파일을 옮기지 못했습니다", &e)),
     }
-    fs::rename(part_path, final_path)
-        .await
-        .map(|()| final_path.to_path_buf())
-        .map_err(|e| AppError::io("받은 파일을 옮기지 못했습니다", &e))
+    match fs::rename(part_path, final_path).await {
+        Ok(()) => Ok(true),
+        Err(e) => {
+            let _ = fs::remove_file(final_path).await;
+            Err(AppError::io("받은 파일을 옮기지 못했습니다", &e))
+        }
+    }
 }
 
 fn walk_stats(root: &Path) -> AppResult<FolderStats> {
@@ -528,17 +540,116 @@ mod tests {
         let part = root.join(".a.txt.x.part");
         std::fs::write(&part, b"new").unwrap();
         let target = root.join("a.txt");
-        let no_links = || std::io::Error::other("links unsupported");
 
-        let moved = move_without_link(&part, &target, no_links()).await.unwrap();
-        assert_eq!(moved, target);
+        assert!(move_without_link(&part, &target).await.unwrap());
         assert_eq!(std::fs::read(&target).unwrap(), b"new");
         assert!(!part.exists());
 
         std::fs::write(&part, b"second").unwrap();
-        assert!(move_without_link(&part, &target, no_links()).await.is_err());
+        assert!(!move_without_link(&part, &target).await.unwrap());
         assert_eq!(std::fs::read(&target).unwrap(), b"new");
         assert!(part.exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn concurrent_moves_without_links_never_share_a_name() {
+        let root = temp_root("nolink-race");
+        let target = root.join("a.txt");
+        let mut tasks = Vec::new();
+        for i in 0..16 {
+            let part = root.join(format!(".a.txt.{i}.part"));
+            std::fs::write(&part, format!("{i}")).unwrap();
+            let target = target.clone();
+            tasks.push(tokio::spawn(async move {
+                move_without_link(&part, &target).await.unwrap()
+            }));
+        }
+        let mut winners = 0;
+        for t in tasks {
+            if t.await.unwrap() {
+                winners += 1;
+            }
+        }
+        assert_eq!(winners, 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod mutants_d {
+    use super::*;
+
+    fn root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pebble-mutd-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn create_inside_reports_a_directory_that_cannot_be_made() {
+        let root = root("inside");
+        std::fs::write(root.join("file.txt"), b"x").unwrap();
+        let rel = RelativePath::parse("/file.txt/sub").unwrap();
+        let err = create_inside(&root, &rel).await.unwrap_err();
+        assert!(
+            err.message.starts_with("폴더를 만들지 못했습니다"),
+            "{}",
+            err.message
+        );
+        let existing = RelativePath::parse("/a/b").unwrap();
+        create_inside(&root, &existing).await.unwrap();
+        create_inside(&root, &existing).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn claim_free_name_gives_up_on_a_part_it_cannot_link_or_move() {
+        let root = root("claim");
+        let missing_part = root.join(".gone.part");
+        let name = FileName::parse("a.txt").unwrap();
+        let err = claim_free_name(&missing_part, &root, &name)
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.starts_with("받은 파일을 옮기지 못했습니다"),
+            "{}",
+            err.message
+        );
+        assert!(!root.join("a.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn claim_free_name_skips_names_taken_by_links() {
+        let root = root("claim-taken");
+        let part = root.join(".a.txt.p.part");
+        std::fs::write(&part, b"new").unwrap();
+        std::fs::write(root.join("a.txt"), b"old").unwrap();
+        let name = FileName::parse("a.txt").unwrap();
+        let got = claim_free_name(&part, &root, &name).await.unwrap();
+        assert_eq!(got.file_name().unwrap(), "a (1).txt");
+        assert_eq!(std::fs::read(root.join("a.txt")).unwrap(), b"old");
+    }
+
+    #[tokio::test]
+    async fn move_without_link_reports_errors_other_than_name_taken() {
+        let root = root("move-err");
+        let part = root.join(".a.txt.p.part");
+        std::fs::write(&part, b"x").unwrap();
+        let target = root.join("missing-dir").join("a.txt");
+        assert!(move_without_link(&part, &target).await.is_err());
+        assert!(part.exists());
+    }
+
+    #[tokio::test]
+    async fn snapshot_lists_only_visible_regular_files() {
+        let root = root("snap");
+        std::fs::write(root.join("a.txt"), b"abc").unwrap();
+        std::fs::write(root.join(".hidden"), b"x").unwrap();
+        std::fs::write(root.join("b.part"), b"x").unwrap();
+        std::fs::create_dir_all(root.join("dir")).unwrap();
+        let files = snapshot(&root).unwrap();
+        let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["a.txt"]);
+        assert_eq!(files[0].size, 3);
     }
 }

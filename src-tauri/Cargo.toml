@@ -33,3 +33,4 @@ local-ip-address = "0.6"
 [dev-dependencies]
 libp2p = { workspace = true }
 futures = { workspace = true }
+async-trait = "0.1"

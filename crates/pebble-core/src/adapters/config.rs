@@ -33,3 +33,23 @@ impl ConfigPaths {
         self.root.join("control.sock")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_paths_live_under_the_root() {
+        let paths = ConfigPaths::new(PathBuf::from("/cfg/pebble"));
+        assert_eq!(paths.root(), Path::new("/cfg/pebble"));
+        assert_eq!(paths.identity(), PathBuf::from("/cfg/pebble/identity.key"));
+        assert_eq!(
+            paths.trusted_peers(),
+            PathBuf::from("/cfg/pebble/trusted-peers.json")
+        );
+        assert_eq!(
+            paths.control_socket(),
+            PathBuf::from("/cfg/pebble/control.sock")
+        );
+    }
+}

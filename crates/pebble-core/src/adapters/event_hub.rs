@@ -36,3 +36,56 @@ impl UiEvents for EventHub {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Collect(Mutex<Vec<String>>);
+
+    impl UiEvents for Collect {
+        fn emit(&self, event: UiEvent) {
+            if let UiEvent::ListeningOn { address } = event {
+                self.0.lock().unwrap().push(address);
+            }
+        }
+    }
+
+    fn listening(address: &str) -> UiEvent {
+        UiEvent::ListeningOn {
+            address: address.to_string(),
+        }
+    }
+
+    #[test]
+    fn emit_reaches_subscribers_and_the_next_sink() {
+        let next = Arc::new(Collect::default());
+        let hub = EventHub::new(Some(next.clone()));
+        let mut first = hub.subscribe();
+        let mut second = hub.subscribe();
+        hub.emit(listening("/a"));
+        for rx in [&mut first, &mut second] {
+            assert!(
+                matches!(rx.try_recv().unwrap(), UiEvent::ListeningOn { address } if address == "/a")
+            );
+        }
+        assert_eq!(*next.0.lock().unwrap(), vec!["/a".to_string()]);
+    }
+
+    #[test]
+    fn emit_without_subscribers_still_reaches_the_next_sink() {
+        let next = Arc::new(Collect::default());
+        let hub = EventHub::new(Some(next.clone()));
+        hub.emit(listening("/b"));
+        assert_eq!(*next.0.lock().unwrap(), vec!["/b".to_string()]);
+        let mut late = hub.subscribe();
+        assert!(late.try_recv().is_err());
+        let mut via_sender = hub.sender().subscribe();
+        hub.emit(listening("/c"));
+        assert!(
+            matches!(via_sender.try_recv().unwrap(), UiEvent::ListeningOn { address } if address == "/c")
+        );
+    }
+}

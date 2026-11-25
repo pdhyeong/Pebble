@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::engine::{EngineCommand, PeerSummary};
+use super::engine::{EngineCommand, PeerSummary, TransferState};
 use super::events::UiEvent;
 use super::folder_watch::FolderWatch;
 use super::ports::{FileStore, UiEvents};
@@ -45,6 +45,14 @@ impl AppServices {
     pub async fn peers(&self) -> AppResult<Vec<PeerSummary>> {
         let engine = self.supervisor.engine().await?;
         engine.ask(|reply| EngineCommand::Peers { reply }).await
+    }
+
+    pub async fn transfer_state(&self, transfer_id: &TransferId) -> AppResult<TransferState> {
+        let engine = self.supervisor.engine().await?;
+        let transfer_id = transfer_id.clone();
+        engine
+            .ask(|reply| EngineCommand::TransferState { transfer_id, reply })
+            .await
     }
 
     pub async fn request_file_list(&self, peer: &str, path: String) -> AppResult<()> {
@@ -123,8 +131,9 @@ impl AppServices {
 
     pub async fn set_shared_folder(&self, path: PathBuf) -> AppResult<()> {
         self.files.ensure_dir(&path).await?;
-        self.folder_watch.restart(&path)?;
-        self.settings.update(|s| s.shared_folder = path.clone());
+        self.folder_watch.restart(&path, || {
+            self.settings.update(|s| s.shared_folder = path.clone())
+        })?;
         self.ui.emit(UiEvent::SharedFolderChanged {
             path: path.display().to_string(),
         });

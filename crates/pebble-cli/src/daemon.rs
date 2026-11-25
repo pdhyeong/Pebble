@@ -2,18 +2,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
 
+use pebble_core::adapters::assembly::{assemble, NodeOptions};
 use pebble_core::adapters::config::ConfigPaths;
 use pebble_core::adapters::control;
 use pebble_core::adapters::event_hub::EventHub;
-use pebble_core::adapters::fs::{JsonTrustStore, LocalFileStore, NotifyFolderWatcher};
-use pebble_core::adapters::p2p::{Libp2pNetwork, DEFAULT_PORT};
-use pebble_core::adapters::tailscale::TailscaleDirectory;
-use pebble_core::application::engine::EngineDeps;
-use pebble_core::application::folder_watch::FolderWatch;
-use pebble_core::application::ports::{FileStore, NetworkFactory, PeerDirectory, UiEvents};
-use pebble_core::application::services::AppServices;
-use pebble_core::application::state::{ActivityStore, SettingsStore};
-use pebble_core::application::supervisor::P2pSupervisor;
+use pebble_core::adapters::p2p::DEFAULT_PORT;
 use pebble_core::domain::error::AppResult;
 use pebble_core::domain::settings::Settings;
 
@@ -35,36 +28,17 @@ pub async fn run(config: ConfigPaths, options: DaemonOptions) -> AppResult<()> {
 
     let hub = Arc::new(EventHub::new(None));
     let printer = tokio::spawn(print_events(hub.subscribe()));
-    let ui: Arc<dyn UiEvents> = hub.clone();
-    let files: Arc<dyn FileStore> = Arc::new(LocalFileStore::new(downloads.clone()));
-    let settings = SettingsStore::new(initial);
-    let activity = ActivityStore::default();
-    let engine_deps = EngineDeps {
-        ui: ui.clone(),
-        files: files.clone(),
-        settings: settings.clone(),
-        activity: activity.clone(),
-        trust: Arc::new(JsonTrustStore::new(config.trusted_peers())),
-    };
-    let network: Arc<dyn NetworkFactory> =
-        Arc::new(Libp2pNetwork::persistent(&config.identity(), port)?);
-    let directory = options
-        .tailscale
-        .then(|| Arc::new(TailscaleDirectory::new(port)) as Arc<dyn PeerDirectory>);
-    let supervisor = Arc::new(P2pSupervisor::new(engine_deps, network, None, directory));
-    let folder_watch = Arc::new(FolderWatch::spawn(
-        Arc::new(NotifyFolderWatcher),
-        ui.clone(),
-        supervisor.clone(),
-    ));
-    let services = AppServices {
-        supervisor,
-        folder_watch,
-        settings,
-        activity,
-        files,
-        ui,
-    };
+    let services = assemble(
+        NodeOptions {
+            config: config.clone(),
+            port,
+            ui: hub.clone(),
+            downloads: downloads.clone(),
+            settings: initial,
+            tailscale: options.tailscale,
+        },
+        |_, _| Ok(None),
+    )?;
 
     let listener = control::bind(&config.control_socket()).await?;
     services.set_shared_folder(shared.clone()).await?;

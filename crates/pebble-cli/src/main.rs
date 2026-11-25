@@ -41,7 +41,7 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             if !message.is_empty() {
-                eprintln!("오류: {message}");
+                eprintln!("오류: {}", log::printable(&message));
             }
             ExitCode::FAILURE
         }

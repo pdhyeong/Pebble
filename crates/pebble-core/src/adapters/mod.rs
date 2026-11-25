@@ -1,3 +1,4 @@
+pub mod assembly;
 pub mod config;
 #[cfg(unix)]
 pub mod control;

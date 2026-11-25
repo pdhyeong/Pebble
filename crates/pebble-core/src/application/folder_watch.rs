@@ -30,9 +30,14 @@ impl FolderWatch {
         }
     }
 
-    pub fn restart(&self, path: &Path) -> AppResult<()> {
-        let next = self.watcher.watch(path, self.changes.clone())?;
-        *self.guard.lock().unwrap_or_else(PoisonError::into_inner) = Some(next);
+    pub fn restart(&self, path: &Path, commit: impl FnOnce()) -> AppResult<()> {
+        let previous = {
+            let mut guard = self.guard.lock().unwrap_or_else(PoisonError::into_inner);
+            let next = self.watcher.watch(path, self.changes.clone())?;
+            commit();
+            guard.replace(next)
+        };
+        drop(previous);
         Ok(())
     }
 }

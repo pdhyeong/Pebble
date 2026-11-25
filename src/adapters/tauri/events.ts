@@ -10,7 +10,7 @@ export interface Subscription {
 
 function toUnsubscribe(pending: Promise<UnlistenFn>): Unsubscribe {
   return () => {
-    pending.then((unlisten) => unlisten());
+    pending.then((unlisten) => unlisten()).catch(() => undefined);
   };
 }
 

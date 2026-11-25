@@ -10,6 +10,10 @@
     "opener:default",
     "dialog:allow-open",
     "fs:allow-read-dir",
-    "fs:allow-stat"
+    "fs:allow-stat",
+    "store:allow-load",
+    "store:allow-get",
+    "store:allow-set",
+    "store:allow-save"
   ]
 }

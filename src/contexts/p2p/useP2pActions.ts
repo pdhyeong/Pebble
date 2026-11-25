@@ -1,10 +1,12 @@
-import { useCallback, type Dispatch } from "react";
+import { useCallback, useState, type Dispatch } from "react";
 import * as commands from "../../adapters/tauri/commands";
 import { describeError } from "../../adapters/tauri/errors";
 import { shortPeerId } from "../../core/p2pEvents";
 import type { DiscoveredPeer, P2pAction } from "../../core/p2pState";
 
 export function useP2pActions(dispatch: Dispatch<P2pAction>, discoveredPeers: DiscoveredPeer[]) {
+  const [pendingDownloads, setPendingDownloads] = useState(0);
+  const [pendingUploads, setPendingUploads] = useState(0);
   const log = useCallback(
     (message: string) => dispatch({ type: "log", message, at: Date.now() }),
     [dispatch],
@@ -85,11 +87,14 @@ export function useP2pActions(dispatch: Dispatch<P2pAction>, discoveredPeers: Di
   const downloadFile = useCallback(
     async (peerId: string, path: string): Promise<string | null> => {
       log(`📥 파일 다운로드 요청: ${path}`);
+      setPendingDownloads((n) => n + 1);
       try {
         return await commands.downloadFile(peerId, path);
       } catch (e) {
         log(`❌ 파일 다운로드 요청 실패: ${describeError(e)}`);
         return null;
+      } finally {
+        setPendingDownloads((n) => n - 1);
       }
     },
     [log],
@@ -98,11 +103,14 @@ export function useP2pActions(dispatch: Dispatch<P2pAction>, discoveredPeers: Di
   const uploadFile = useCallback(
     async (peerId: string, filePath: string, remotePath: string = "/"): Promise<string | null> => {
       log(`📤 파일 업로드 요청: ${filePath} -> ${remotePath}`);
+      setPendingUploads((n) => n + 1);
       try {
         return await commands.uploadFile(peerId, filePath, remotePath);
       } catch (e) {
         log(`❌ 파일 업로드 요청 실패: ${describeError(e)}`);
         return null;
+      } finally {
+        setPendingUploads((n) => n - 1);
       }
     },
     [log],
@@ -198,6 +206,8 @@ export function useP2pActions(dispatch: Dispatch<P2pAction>, discoveredPeers: Di
 
   return {
     initialize,
+    pendingDownloads,
+    pendingUploads,
     startP2p,
     stopP2p,
     connectToPeer,

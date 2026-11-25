@@ -24,6 +24,11 @@ type CancelFn = (transferId: string) => Promise<void>;
 const MAX_CONCURRENT = 3;
 const MAX_UNMATCHED_OUTCOMES = 200;
 
+function bytesPerSecond(bytesDone: number, startTime: number | undefined, now: number): number {
+    const seconds = startTime ? (now - startTime) / 1000 : 0;
+    return seconds > 0 ? bytesDone / seconds : 0;
+}
+
 function applyOutcome(item: TransferItem, outcome: Outcome): TransferItem {
     return outcome.status === "complete"
         ? { ...item, status: "complete", progress: 100 }
@@ -123,10 +128,15 @@ export function useTransferQueue(upload: UploadFn, cancel: CancelFn) {
         const stops = [
             onEvent("transfer-progress", (p) => {
                 if (p.direction !== "upload") return;
+                const now = Date.now();
                 setQueue((prev) =>
                     prev.map((item) =>
                         item.transferId === p.transfer_id && item.status === "uploading"
-                            ? { ...item, progress: Math.round(p.progress) }
+                            ? {
+                                  ...item,
+                                  progress: Math.round(p.progress),
+                                  speed: bytesPerSecond(p.bytes_done, item.startTime, now),
+                              }
                             : item
                     )
                 );

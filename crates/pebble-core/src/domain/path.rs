@@ -57,6 +57,7 @@ impl FileName {
             || raw == "."
             || raw == ".."
             || raw.contains(['/', '\\', '\0'])
+            || raw.len() > MAX_FILE_NAME_BYTES
             || is_drive_prefix(raw);
         if forbidden {
             return Err(AppError::new(
@@ -179,5 +180,12 @@ mod tests {
         assert_eq!(child.to_display(), "/docs/a.txt");
         assert_eq!(child.file_name(), Some(name));
         assert_eq!(RelativePath::root().file_name(), None);
+    }
+
+    #[test]
+    fn file_names_longer_than_the_os_limit_are_rejected_up_front() {
+        assert!(FileName::parse(&"a".repeat(255)).is_ok());
+        assert!(FileName::parse(&"a".repeat(256)).is_err());
+        assert!(FileName::parse(&"가".repeat(86)).is_err());
     }
 }

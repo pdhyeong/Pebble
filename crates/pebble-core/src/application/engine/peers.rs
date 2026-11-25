@@ -16,10 +16,10 @@ pub const PAIRING_EXPIRY: Duration = Duration::from_secs(170);
 pub const MAX_DEVICE_NAME_CHARS: usize = 64;
 
 pub(super) fn clip_device_name(name: String) -> String {
-    match name.char_indices().nth(MAX_DEVICE_NAME_CHARS) {
-        Some((cut, _)) => name[..cut].to_string(),
-        None => name,
-    }
+    name.chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_DEVICE_NAME_CHARS)
+        .collect()
 }
 
 impl Engine {

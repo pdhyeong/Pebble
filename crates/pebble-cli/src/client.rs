@@ -6,6 +6,8 @@ use tokio::net::UnixStream;
 
 use pebble_core::adapters::control::{ControlReply, ControlRequest};
 
+use crate::log::printable;
+
 pub async fn run(socket: &Path, request: ControlRequest, json: bool) -> Result<(), String> {
     let stream = UnixStream::connect(socket).await.map_err(|_| {
         format!(
@@ -49,13 +51,13 @@ pub async fn run(socket: &Path, request: ControlRequest, json: bool) -> Result<(
     Err("Pebble 이 응답 없이 연결을 끊었습니다.".to_string())
 }
 
-fn text(value: &Value) -> &str {
-    value.as_str().unwrap_or("")
+fn text(value: &Value) -> String {
+    printable(value.as_str().unwrap_or(""))
 }
 
 fn show_event(event: &Value) {
     let payload = &event["payload"];
-    match text(&event["event"]) {
+    match text(&event["event"]).as_str() {
         "pairing-sent" => println!(
             "PIN {} — 상대 기기에 같은 PIN 이 보이면 상대에서 승인하세요. 기다리는 중…",
             text(&payload["pin"])
@@ -133,7 +135,7 @@ fn show_peers(data: &Value) {
         };
         println!(
             "{:<20} {:<6} {:<6} {:<8} {}",
-            peer["device_name"].as_str().unwrap_or("?"),
+            text(&peer["device_name"]),
             flag("connected"),
             flag("trusted"),
             peer["pending_pin"].as_str().unwrap_or("-"),

@@ -95,3 +95,14 @@ mod tests {
         assert_eq!(AppError::io("열기", &err).code, ErrorCode::AccessDenied);
     }
 }
+
+#[cfg(test)]
+mod mutants_d {
+    use super::*;
+
+    #[test]
+    fn display_shows_the_message() {
+        let err = AppError::new(ErrorCode::Io, "디스크가 가득 찼습니다");
+        assert_eq!(err.to_string(), "디스크가 가득 찼습니다");
+    }
+}

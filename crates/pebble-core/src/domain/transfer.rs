@@ -229,3 +229,36 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod mutants_d {
+    use super::*;
+
+    #[test]
+    fn chunk_size_is_one_mebibyte() {
+        assert_eq!(CHUNK_SIZE, 1_048_576);
+    }
+
+    #[test]
+    fn chunk_errors_display_their_numbers() {
+        let order = ChunkError::OutOfOrder {
+            expected: 3,
+            got: 5,
+        }
+        .to_string();
+        assert!(
+            order.contains("기대 3") && order.contains("받음 5"),
+            "{order}"
+        );
+        let length = ChunkError::WrongLength {
+            expected: 10,
+            got: 7,
+        }
+        .to_string();
+        assert!(
+            length.contains("기대 10") && length.contains("받음 7"),
+            "{length}"
+        );
+        assert!(!ChunkError::TooManyChunks.to_string().is_empty());
+    }
+}

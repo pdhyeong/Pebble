@@ -200,4 +200,76 @@ mod tests {
         let encoded = Bincode::encode(&(String::from("transfer-id"), 3u32, chunk)).unwrap();
         assert!(encoded.len() <= Bincode::MAX_MESSAGE_BYTES);
     }
+
+    fn frame_with_len(len: usize) -> Cursor<Vec<u8>> {
+        Cursor::new(u32::try_from(len).unwrap().to_be_bytes().to_vec())
+    }
+
+    fn assert_read_limit<F: WireFormat>() {
+        let mut codec = FramedCodec::<F, Msg, Msg>::default();
+        let mut over = frame_with_len(F::MAX_MESSAGE_BYTES + 1);
+        let err = block_on(codec.read_request(&protocol(), &mut over)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("exceeds limit"));
+
+        let mut at_limit = frame_with_len(F::MAX_MESSAGE_BYTES);
+        let err = block_on(codec.read_request(&protocol(), &mut at_limit)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn json_read_limit_is_eight_mebibytes_inclusive() {
+        assert_eq!(Json::MAX_MESSAGE_BYTES, 8 * 1024 * 1024);
+        assert_read_limit::<Json>();
+    }
+
+    #[test]
+    fn bincode_read_limit_is_one_chunk_plus_64_kib_inclusive() {
+        assert_eq!(Bincode::MAX_MESSAGE_BYTES, CHUNK_SIZE + 64 * 1024);
+        assert_read_limit::<Bincode>();
+    }
+
+    #[test]
+    fn write_limit_is_inclusive_and_frames_carry_a_length_prefix() {
+        let mut codec = TestCodec::default();
+        let overhead = Json::encode(&Msg {
+            text: String::new(),
+        })
+        .unwrap()
+        .len();
+        let max = Json::MAX_MESSAGE_BYTES;
+
+        let mut wire = Cursor::new(Vec::new());
+        let exact = Msg {
+            text: "a".repeat(max - overhead),
+        };
+        block_on(codec.write_request(&protocol(), &mut wire, exact)).unwrap();
+        let bytes = wire.into_inner();
+        assert_eq!(bytes.len(), 4 + max);
+        assert_eq!(bytes[..4], u32::try_from(max).unwrap().to_be_bytes());
+
+        let mut wire = Cursor::new(Vec::new());
+        let over = Msg {
+            text: "a".repeat(max - overhead + 1),
+        };
+        let err = block_on(codec.write_request(&protocol(), &mut wire, over)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(wire.into_inner().is_empty());
+    }
+
+    #[test]
+    fn full_size_frame_roundtrips() {
+        let mut codec = TestCodec::default();
+        let overhead = Json::encode(&Msg {
+            text: String::new(),
+        })
+        .unwrap()
+        .len();
+        let text = "b".repeat(Json::MAX_MESSAGE_BYTES - overhead);
+        let mut wire = Cursor::new(Vec::new());
+        block_on(codec.write_response(&protocol(), &mut wire, Msg { text: text.clone() })).unwrap();
+        wire.set_position(0);
+        let read = block_on(codec.read_response(&protocol(), &mut wire)).unwrap();
+        assert_eq!(read.text, text);
+    }
 }

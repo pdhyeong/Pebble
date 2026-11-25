@@ -69,8 +69,7 @@ fn load_or_create_identity(path: &Path) -> AppResult<Keypair> {
         .to_protobuf_encoding()
         .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| AppError::io("설정 폴더를 만들지 못했습니다", &e))?;
+        create_private_dir(dir).map_err(|e| AppError::io("설정 폴더를 만들지 못했습니다", &e))?;
     }
     write_private(path, &bytes).map_err(|e| AppError::io("기기 키를 저장하지 못했습니다", &e))?;
     Ok(identity)
@@ -86,6 +85,20 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .mode(0o600)
         .open(path)?;
     file.write_all(bytes)
+}
+
+#[cfg(unix)]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
 }
 
 #[cfg(not(unix))]
@@ -671,5 +684,414 @@ fn failure(
         kind,
         transfer_id,
         error: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::net::{PairingAsk, StreamMsg};
+    use libp2p::core::{ConnectedPoint, Endpoint};
+    use libp2p::swarm::DialError;
+    use std::num::NonZeroU32;
+    use tokio::sync::mpsc::error::TryRecvError;
+
+    fn actor() -> (NetworkActor, mpsc::Receiver<NetEvent>) {
+        let swarm = build_swarm(Keypair::generate_ed25519(), 0).unwrap();
+        let (events, rx) = mpsc::channel(EVENT_BUFFER);
+        let actor = NetworkActor {
+            swarm,
+            events,
+            inbound: HashMap::new(),
+            next_inbound: 0,
+            stream_requests: HashMap::new(),
+            quic_addresses: HashMap::new(),
+            quic_dialed: HashSet::new(),
+            connections: HashMap::new(),
+            probes: HashMap::new(),
+        };
+        (actor, rx)
+    }
+
+    fn temp_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("pebble-p2p-{label}-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn dialer(addr: &str) -> ConnectedPoint {
+        ConnectedPoint::Dialer {
+            address: addr.parse().unwrap(),
+            role_override: Endpoint::Dialer,
+        }
+    }
+
+    fn established(
+        peer: libp2p::PeerId,
+        id: usize,
+        count: u32,
+    ) -> SwarmEvent<PebbleBehaviourEvent, ()> {
+        SwarmEvent::ConnectionEstablished {
+            peer_id: peer,
+            connection_id: ConnectionId::new_unchecked(id),
+            endpoint: dialer("/ip4/10.1.2.3/tcp/4001"),
+            num_established: NonZeroU32::new(count).unwrap(),
+            concurrent_dial_errors: None,
+            established_in: Duration::from_millis(1),
+        }
+    }
+
+    fn closed(
+        peer: libp2p::PeerId,
+        id: usize,
+        remaining: u32,
+    ) -> SwarmEvent<PebbleBehaviourEvent, ()> {
+        SwarmEvent::ConnectionClosed {
+            peer_id: peer,
+            connection_id: ConnectionId::new_unchecked(id),
+            endpoint: dialer("/ip4/10.1.2.3/tcp/4001"),
+            num_established: remaining,
+            cause: None,
+        }
+    }
+
+    #[test]
+    fn idle_connection_timeout_is_one_hour() {
+        assert_eq!(IDLE_CONNECTION_TIMEOUT, Duration::from_secs(3600));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_identity_file_is_private_and_reloads_the_same_key() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_path("identity");
+        let file = dir.join("nested").join("identity.key");
+        let first = load_or_create_identity(&file).unwrap();
+        let on_disk = std::fs::read(&file).unwrap();
+        assert!(!on_disk.is_empty());
+        assert_eq!(
+            Keypair::from_protobuf_encoding(&on_disk)
+                .unwrap()
+                .public()
+                .to_peer_id(),
+            first.public().to_peer_id()
+        );
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let dir_mode = std::fs::metadata(file.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(dir_mode, 0o700);
+        let second = load_or_create_identity(&file).unwrap();
+        assert_eq!(second.public().to_peer_id(), first.public().to_peer_id());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_private_refuses_to_overwrite_and_stores_bytes() {
+        let dir = temp_path("write-private");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("secret");
+        write_private(&file, b"abc").unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"abc");
+        assert!(write_private(&file, b"xyz").is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn ip_of_reads_v4_and_v6_and_ignores_others() {
+        let v4 = ip_of(&"/ip4/10.0.0.7/tcp/1".parse().unwrap());
+        assert_eq!(v4, Some("10.0.0.7".parse().unwrap()));
+        let v6 = ip_of(&"/ip6/::1/tcp/1".parse().unwrap());
+        assert_eq!(v6, Some("::1".parse().unwrap()));
+        assert_eq!(ip_of(&"/dns4/example.com/tcp/1".parse().unwrap()), None);
+    }
+
+    #[tokio::test]
+    async fn probe_skips_known_ips_and_dials_new_ones() {
+        let (mut actor, _rx) = actor();
+        let known: IpAddr = "10.9.8.7".parse().unwrap();
+        actor
+            .connections
+            .insert(ConnectionId::new_unchecked(1), known);
+        actor.probe("/ip4/10.9.8.7/tcp/4001");
+        assert!(actor.probes.is_empty());
+
+        actor.probe("/ip4/10.9.8.8/tcp/4001");
+        assert_eq!(actor.probes.len(), 1);
+        assert_eq!(
+            actor.probes.values().next().copied(),
+            Some("10.9.8.8".parse().unwrap())
+        );
+
+        actor.probe("/ip4/10.9.8.8/tcp/4002");
+        assert_eq!(actor.probes.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn prefer_quic_dials_the_known_quic_address_once() {
+        let (mut actor, _rx) = actor();
+        let peer = libp2p::PeerId::random();
+        actor.prefer_quic(peer);
+        assert!(actor.quic_dialed.is_empty());
+
+        actor
+            .quic_addresses
+            .insert(peer, "/ip4/10.9.8.7/udp/4001/quic-v1".parse().unwrap());
+        actor.prefer_quic(peer);
+        assert!(actor.quic_dialed.contains(&peer));
+    }
+
+    #[tokio::test]
+    async fn outgoing_connection_error_forgets_the_probe() {
+        let (mut actor, _rx) = actor();
+        let id = ConnectionId::new_unchecked(7);
+        let other = ConnectionId::new_unchecked(8);
+        actor.probes.insert(id, "10.0.0.1".parse().unwrap());
+        actor.probes.insert(other, "10.0.0.2".parse().unwrap());
+        let keep = actor
+            .on_swarm_event(
+                SwarmEvent::<PebbleBehaviourEvent, ()>::OutgoingConnectionError {
+                    connection_id: id,
+                    peer_id: None,
+                    error: DialError::Aborted,
+                },
+            )
+            .await;
+        assert!(keep);
+        assert!(!actor.probes.contains_key(&id));
+        assert!(actor.probes.contains_key(&other));
+    }
+
+    #[tokio::test]
+    async fn connected_is_announced_only_for_the_first_connection() {
+        let (mut actor, mut rx) = actor();
+        let peer = libp2p::PeerId::random();
+        assert!(actor.on_swarm_event(established(peer, 1, 1)).await);
+        assert!(matches!(rx.try_recv(), Ok(NetEvent::Connected { .. })));
+        assert_eq!(
+            actor.connections.get(&ConnectionId::new_unchecked(1)),
+            Some(&"10.1.2.3".parse().unwrap())
+        );
+
+        assert!(actor.on_swarm_event(established(peer, 2, 2)).await);
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[tokio::test]
+    async fn probed_connection_reports_the_discovered_peer() {
+        let (mut actor, mut rx) = actor();
+        let peer = libp2p::PeerId::random();
+        actor
+            .probes
+            .insert(ConnectionId::new_unchecked(5), "10.1.2.3".parse().unwrap());
+        assert!(actor.on_swarm_event(established(peer, 5, 1)).await);
+        assert!(actor.probes.is_empty());
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(NetEvent::PeerDiscovered { address, .. }) if address.contains("10.1.2.3")
+        ));
+        assert!(matches!(rx.try_recv(), Ok(NetEvent::Connected { .. })));
+    }
+
+    #[tokio::test]
+    async fn disconnected_is_announced_only_after_the_last_connection_closes() {
+        let (mut actor, mut rx) = actor();
+        let peer = libp2p::PeerId::random();
+        actor
+            .connections
+            .insert(ConnectionId::new_unchecked(1), "10.1.2.3".parse().unwrap());
+        actor
+            .connections
+            .insert(ConnectionId::new_unchecked(2), "10.1.2.3".parse().unwrap());
+        actor.quic_dialed.insert(peer);
+
+        assert!(actor.on_swarm_event(closed(peer, 1, 1)).await);
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert!(!actor
+            .connections
+            .contains_key(&ConnectionId::new_unchecked(1)));
+        assert!(actor.quic_dialed.contains(&peer));
+
+        assert!(actor.on_swarm_event(closed(peer, 2, 0)).await);
+        assert!(matches!(rx.try_recv(), Ok(NetEvent::Disconnected { .. })));
+        assert!(actor.connections.is_empty());
+        assert!(!actor.quic_dialed.contains(&peer));
+    }
+
+    #[tokio::test]
+    async fn mdns_discovery_emits_tcp_peers_and_remembers_quic_addresses() {
+        let (mut actor, mut rx) = actor();
+        let tcp_peer = libp2p::PeerId::random();
+        let quic_peer = libp2p::PeerId::random();
+        let tcp_addr: Multiaddr = "/ip4/10.0.0.5/tcp/4001".parse().unwrap();
+        let quic_addr: Multiaddr = "/ip4/10.0.0.6/udp/4001/quic-v1".parse().unwrap();
+        let keep = actor
+            .on_mdns(mdns::Event::Discovered(vec![
+                (quic_peer, quic_addr.clone()),
+                (tcp_peer, tcp_addr.clone()),
+            ]))
+            .await;
+        assert!(keep);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(NetEvent::PeerDiscovered { address, .. }) if address == tcp_addr.to_string()
+        ));
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_eq!(actor.quic_addresses.get(&quic_peer), Some(&quic_addr));
+        assert!(!actor.quic_addresses.contains_key(&tcp_peer));
+    }
+
+    #[tokio::test]
+    async fn mdns_discovery_stops_when_the_event_receiver_is_gone() {
+        let (mut actor, rx) = actor();
+        drop(rx);
+        let addr: Multiaddr = "/ip4/10.0.0.5/tcp/4001".parse().unwrap();
+        let keep = actor
+            .on_mdns(mdns::Event::Discovered(vec![(
+                libp2p::PeerId::random(),
+                addr,
+            )]))
+            .await;
+        assert!(!keep);
+    }
+
+    #[tokio::test]
+    async fn mdns_expiry_emits_once_per_peer_and_forgets_quic_address() {
+        let (mut actor, mut rx) = actor();
+        let peer = libp2p::PeerId::random();
+        let addr: Multiaddr = "/ip4/10.0.0.6/udp/4001/quic-v1".parse().unwrap();
+        actor.quic_addresses.insert(peer, addr.clone());
+        let keep = actor
+            .on_mdns(mdns::Event::Expired(vec![
+                (peer, addr.clone()),
+                (peer, "/ip4/10.0.0.6/tcp/4001".parse().unwrap()),
+            ]))
+            .await;
+        assert!(keep);
+        assert!(matches!(rx.try_recv(), Ok(NetEvent::PeerExpired { .. })));
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert!(actor.quic_addresses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mdns_expiry_stops_when_the_event_receiver_is_gone() {
+        let (mut actor, rx) = actor();
+        drop(rx);
+        let addr: Multiaddr = "/ip4/10.0.0.6/tcp/4001".parse().unwrap();
+        let keep = actor
+            .on_mdns(mdns::Event::Expired(vec![(libp2p::PeerId::random(), addr)]))
+            .await;
+        assert!(!keep);
+    }
+
+    fn failure_error() -> request_response::OutboundFailure {
+        request_response::OutboundFailure::ConnectionClosed
+    }
+
+    #[tokio::test]
+    async fn outbound_failures_are_reported_per_protocol() {
+        let (mut actor, _rx) = actor();
+        let peer = libp2p::PeerId::random();
+        let transfer = TransferId::from_wire("t-fail".into());
+
+        let id = actor
+            .swarm
+            .behaviour_mut()
+            .file_list
+            .send_request(&peer, FileListRequestDto { path: "/".into() });
+        let event = actor.on_file_list(request_response::Event::OutboundFailure {
+            peer,
+            request_id: id,
+            error: failure_error(),
+        });
+        assert!(matches!(
+            event,
+            Some(NetEvent::RequestFailed {
+                kind: RequestKind::FileList,
+                transfer_id: None,
+                ..
+            })
+        ));
+
+        let id = actor.swarm.behaviour_mut().stream.send_request(
+            &peer,
+            StreamMsg::Cancel {
+                transfer_id: transfer.clone(),
+            }
+            .into(),
+        );
+        actor.stream_requests.insert(id, transfer.clone());
+        let event = actor.on_stream(request_response::Event::OutboundFailure {
+            peer,
+            request_id: id,
+            error: failure_error(),
+        });
+        assert!(matches!(
+            event,
+            Some(NetEvent::RequestFailed {
+                kind: RequestKind::Stream,
+                transfer_id: Some(t),
+                ..
+            }) if t == transfer
+        ));
+        assert!(actor.stream_requests.is_empty());
+
+        let id = actor
+            .swarm
+            .behaviour_mut()
+            .device_info
+            .send_request(&peer, DeviceInfoRequestDto {});
+        let event = actor.on_device_info(request_response::Event::OutboundFailure {
+            peer,
+            request_id: id,
+            error: failure_error(),
+        });
+        assert!(matches!(
+            event,
+            Some(NetEvent::RequestFailed {
+                kind: RequestKind::DeviceInfo,
+                ..
+            })
+        ));
+
+        let id = actor.swarm.behaviour_mut().pairing.send_request(
+            &peer,
+            PairingAsk {
+                device_name: "x".into(),
+                pin: "1234".into(),
+            }
+            .into(),
+        );
+        let event = actor.on_pairing(request_response::Event::OutboundFailure {
+            peer,
+            request_id: id,
+            error: failure_error(),
+        });
+        assert!(matches!(
+            event,
+            Some(NetEvent::RequestFailed {
+                kind: RequestKind::Pairing,
+                ..
+            })
+        ));
+
+        let id = actor
+            .swarm
+            .behaviour_mut()
+            .directory_changed
+            .send_request(&peer, DirectoryChangedDto {});
+        let event = actor.on_directory_changed(request_response::Event::OutboundFailure {
+            peer,
+            request_id: id,
+            error: failure_error(),
+        });
+        assert!(matches!(
+            event,
+            Some(NetEvent::RequestFailed {
+                kind: RequestKind::DirectoryChanged,
+                ..
+            })
+        ));
     }
 }

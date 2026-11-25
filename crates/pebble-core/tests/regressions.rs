@@ -1,10 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use pebble_core::adapters::fs::{JsonTrustStore, LocalFileStore};
-use pebble_core::application::engine::{spawn_engine, EngineCommand, EngineDeps, EngineHandle};
+use pebble_core::application::engine::{
+    spawn_engine, EngineCommand, EngineDeps, EngineHandle, PeerSummary,
+};
 use pebble_core::application::events::UiEvent;
 use pebble_core::application::net::{
     InboundId, InboundRequest, NetCommand, NetEvent, NetworkLink, PairingAsk, StreamMsg,
@@ -16,7 +18,7 @@ use pebble_core::application::ports::{
 use pebble_core::application::server_sync::{spawn_server_sync, ServerDeps};
 use pebble_core::application::state::{ActivityStore, SettingsStore};
 use pebble_core::application::supervisor::P2pSupervisor;
-use pebble_core::domain::error::AppResult;
+use pebble_core::domain::error::{AppResult, ErrorCode};
 use pebble_core::domain::files::FileSnapshot;
 use pebble_core::domain::path::{FileName, RelativePath};
 use pebble_core::domain::peer::PeerId;
@@ -104,6 +106,37 @@ fn harness_with(trust: Arc<dyn TrustStore>) -> Harness {
     }
 }
 
+async fn next_command(h: &mut Harness, wanted: impl Fn(&NetCommand) -> bool) -> NetCommand {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let command = h.cmds.recv().await.expect("엔진이 멈춤");
+            if wanted(&command) {
+                return command;
+            }
+        }
+    })
+    .await
+    .expect("기다린 네트워크 명령이 5초 안에 오지 않음")
+}
+
+async fn peers_until(h: &Harness, ready: impl Fn(&[PeerSummary]) -> bool) -> Vec<PeerSummary> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let peers = h
+                .handle
+                .ask(|reply| EngineCommand::Peers { reply })
+                .await
+                .unwrap();
+            if ready(&peers) {
+                return peers;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("기다린 기기 상태가 5초 안에 되지 않음")
+}
+
 fn drain(h: &mut Harness) -> Vec<NetCommand> {
     let mut v = Vec::new();
     while let Ok(c) = h.cmds.try_recv() {
@@ -118,7 +151,7 @@ async fn upload_to_unpaired_peer_must_not_send_file() {
     let file = h.root.join("secret.txt");
     std::fs::write(&file, b"secret").unwrap();
     let peer = PeerId::parse(PEER).unwrap();
-    let _ = h
+    let refused = h
         .handle
         .ask(|reply| EngineCommand::Upload {
             peer: peer.clone(),
@@ -126,8 +159,9 @@ async fn upload_to_unpaired_peer_must_not_send_file() {
             remote_dir: RelativePath::root(),
             reply,
         })
-        .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::AccessDenied);
     let sent_init = drain(&mut h).iter().any(|c| {
         matches!(
             c,
@@ -142,7 +176,7 @@ async fn upload_to_unpaired_peer_must_not_send_file() {
 
 #[tokio::test]
 async fn cancel_arriving_before_init_must_not_leave_partial_file() {
-    let h = harness(&[PEER]);
+    let mut h = harness(&[PEER]);
     let peer = PeerId::parse(PEER).unwrap();
     let id = TransferId::from_wire("t-1".into());
     h.events
@@ -169,7 +203,15 @@ async fn cancel_arriving_before_init_must_not_leave_partial_file() {
         })
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    let ack = next_command(
+        &mut h,
+        |c| matches!(c, NetCommand::RespondStream { inbound, .. } if *inbound == InboundId(2)),
+    )
+    .await;
+    assert!(
+        matches!(ack, NetCommand::RespondStream { ack, .. } if ack.result.is_err()),
+        "취소 뒤에 온 Init 을 받아들임"
+    );
     let parts: Vec<_> = std::fs::read_dir(&h.shared)
         .map(|d| {
             d.flatten()
@@ -192,7 +234,7 @@ async fn cancel_arriving_before_init_must_not_leave_partial_file() {
 async fn device_name_must_not_survive_reconnect() {
     let h = harness(&[]);
     let peer = PeerId::parse(PEER).unwrap();
-    let huge = "x".repeat(1024 * 1024);
+    let huge = format!("\u{1b}[2J\nfake{}", "x".repeat(1024 * 1024));
     for ev in [
         NetEvent::Connected { peer: peer.clone() },
         NetEvent::DeviceInfoReplied {
@@ -204,15 +246,11 @@ async fn device_name_must_not_survive_reconnect() {
     ] {
         h.events.send(ev).await.unwrap();
     }
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let peers = h
-        .handle
-        .ask(|reply| EngineCommand::Peers { reply })
-        .await
-        .unwrap();
+    let peers = peers_until(&h, |p| p.first().is_some_and(|s| s.device_name.is_some())).await;
     let name = peers[0].device_name.clone();
     assert!(
-        name.as_ref().is_none_or(|n| n.len() <= 256),
+        name.as_ref()
+            .is_some_and(|n| n.chars().count() <= 64 && !n.chars().any(char::is_control)),
         "끊었다 다시 붙어도 1MiB 이름이 그대로 남음(길이 {:?})",
         name.map(|n| n.len())
     );
@@ -283,13 +321,20 @@ async fn concurrent_trust_saves_all_succeed() {
     );
 }
 
-struct HangingNet;
+struct HangingNet(Arc<tokio::sync::Notify>);
 impl NetworkFactory for HangingNet {
     fn start(&self) -> AppResult<NetworkLink> {
-        let (commands, _rx) = mpsc::unbounded_channel();
+        let (commands, mut rx) = mpsc::unbounded_channel();
         let (_tx, events) = mpsc::channel(8);
-        let task = tokio::spawn(std::future::pending::<()>());
-        std::mem::forget(_rx);
+        let asked_to_stop = self.0.clone();
+        let task = tokio::spawn(async move {
+            while let Some(command) = rx.recv().await {
+                if matches!(command, NetCommand::Shutdown) {
+                    asked_to_stop.notify_one();
+                }
+            }
+            std::future::pending::<()>().await
+        });
         std::mem::forget(_tx);
         Ok(NetworkLink {
             local_peer: PeerId::parse(PEER).unwrap(),
@@ -310,11 +355,19 @@ async fn stop_must_not_block_status_queries() {
         activity: ActivityStore::default(),
         trust: Arc::new(MemTrust(vec![])),
     };
-    let sup = Arc::new(P2pSupervisor::new(deps, Arc::new(HangingNet), None, None));
+    let asked_to_stop = Arc::new(tokio::sync::Notify::new());
+    let sup = Arc::new(P2pSupervisor::new(
+        deps,
+        Arc::new(HangingNet(asked_to_stop.clone())),
+        None,
+        None,
+    ));
     sup.start().await.unwrap();
     let s2 = sup.clone();
     let stopper = tokio::spawn(async move { s2.stop().await });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::timeout(Duration::from_secs(5), asked_to_stop.notified())
+        .await
+        .expect("정지가 네트워크 종료 단계까지 가지 않음");
     let t = std::time::Instant::now();
     let _ = sup.is_running().await;
     let waited = t.elapsed();
@@ -340,7 +393,6 @@ async fn two_binds_on_same_socket_only_one_wins() {
         if a.is_ok() && b.is_ok() {
             both += 1;
         }
-        let _ = Path::new(&p);
     }
     assert_eq!(both, 0, "300번 중 {both}번 두 쪽 다 소켓을 잡음");
 }
@@ -390,7 +442,7 @@ async fn approve_incoming_pairing(trust: Arc<CountingTrust>) -> (Harness, AppRes
         })
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    peers_until(&h, |p| p.iter().any(|s| s.pending_pin.is_some())).await;
     let result = h
         .handle
         .ask(|reply| EngineCommand::RespondPairing {
@@ -538,11 +590,10 @@ async fn unpaired_sender_is_refused_by_receiver() {
         })
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let refused = drain(&mut h).iter().any(|c| {
-        matches!(c, NetCommand::RespondStream { ack, .. } if ack.result == Err("페어링이 필요합니다.".to_string()))
-    });
-    assert!(refused);
+    let ack = next_command(&mut h, |c| matches!(c, NetCommand::RespondStream { .. })).await;
+    assert!(
+        matches!(ack, NetCommand::RespondStream { ack, .. } if ack.result == Err("페어링이 필요합니다.".to_string()))
+    );
     assert!(!h.shared.join("intruder.txt").exists());
     assert_eq!(h.ui.count("transfer-started"), 0);
 }

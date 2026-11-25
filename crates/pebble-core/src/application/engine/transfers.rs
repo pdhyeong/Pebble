@@ -790,3 +790,193 @@ async fn read_step(t: &mut Outgoing) -> Result<Step, String> {
         percent: t.counter.percent(),
     })
 }
+
+#[cfg(test)]
+mod mutants_d {
+    use super::*;
+    use crate::adapters::fs::LocalFileStore;
+    use crate::application::engine::{Engine, EngineDeps};
+    use crate::application::ports::UiEvents;
+    use crate::application::state::{ActivityStore, SettingsStore};
+    use crate::domain::settings::Settings;
+    use async_trait::async_trait;
+    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc;
+
+    const PEER_A: &str = "12D3KooWAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    #[derive(Default)]
+    struct Rec(Mutex<Vec<serde_json::Value>>);
+    impl UiEvents for Rec {
+        fn emit(&self, e: UiEvent) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(&e).unwrap());
+        }
+    }
+    impl Rec {
+        fn count(&self, name: &str) -> usize {
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e["event"] == name)
+                .count()
+        }
+    }
+
+    struct NullSink;
+    #[async_trait]
+    impl ChunkSink for NullSink {
+        async fn write(&mut self, _: &[u8]) -> AppResult<()> {
+            Ok(())
+        }
+        async fn commit(self: Box<Self>) -> AppResult<std::path::PathBuf> {
+            Ok(std::path::PathBuf::new())
+        }
+        async fn abort(self: Box<Self>) {}
+    }
+
+    fn engine() -> (Engine, Arc<Rec>, mpsc::UnboundedReceiver<NetCommand>) {
+        let root = std::env::temp_dir().join(format!("mutd-unit-{}", uuid::Uuid::new_v4()));
+        let ui = Arc::new(Rec::default());
+        let deps = EngineDeps {
+            ui: ui.clone(),
+            files: Arc::new(LocalFileStore::new(root.join("downloads"))),
+            settings: SettingsStore::new(Settings::with_home(Some(root))),
+            activity: ActivityStore::default(),
+            trust: Arc::new(NoTrust),
+        };
+        let (net, cmds) = mpsc::unbounded_channel();
+        let engine = Engine {
+            deps,
+            folder_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            finished: Mutex::new(VecDeque::new()),
+            net,
+            trusted: HashSet::new(),
+            connected: HashSet::new(),
+            device_names: HashMap::new(),
+            pending_pairings: HashMap::new(),
+            trust_unreadable: false,
+            early_cancels: VecDeque::new(),
+            outgoing: HashMap::new(),
+            incoming: HashMap::new(),
+            pulls: HashMap::new(),
+        };
+        (engine, ui, cmds)
+    }
+
+    struct NoTrust;
+    #[async_trait]
+    impl crate::application::ports::TrustStore for NoTrust {
+        async fn load(&self) -> AppResult<Vec<PeerId>> {
+            Ok(Vec::new())
+        }
+        async fn save(&self, _: &[PeerId]) -> AppResult<()> {
+            Ok(())
+        }
+    }
+
+    fn ago(by: Duration) -> Instant {
+        Instant::now().checked_sub(by).unwrap()
+    }
+
+    fn incoming(touched: Instant) -> Incoming {
+        Incoming {
+            peer: PeerId::parse(PEER_A).unwrap(),
+            file_name: "f".into(),
+            sink: Box::new(NullSink),
+            counter: ChunkCounter::new(10),
+            started: touched,
+            touched,
+        }
+    }
+
+    fn pull(touched: Instant) -> PendingPull {
+        PendingPull {
+            peer: PeerId::parse(PEER_A).unwrap(),
+            file_name: "f".into(),
+            touched,
+        }
+    }
+
+    fn tid(raw: &str) -> TransferId {
+        TransferId::from_wire(raw.into())
+    }
+
+    #[tokio::test]
+    async fn sweep_fails_only_transfers_idle_past_the_timeout() {
+        let (mut e, ui, mut cmds) = engine();
+        let stale = STALL_TIMEOUT + Duration::from_secs(1);
+        let fresh = STALL_TIMEOUT - Duration::from_secs(30);
+        e.incoming.insert(tid("in-stale"), incoming(ago(stale)));
+        e.incoming.insert(tid("in-fresh"), incoming(ago(fresh)));
+        e.pulls.insert(tid("pull-stale"), pull(ago(stale)));
+        e.pulls.insert(tid("pull-fresh"), pull(ago(fresh)));
+        e.sweep_stalled().await;
+        assert!(!e.incoming.contains_key(&tid("in-stale")));
+        assert!(e.incoming.contains_key(&tid("in-fresh")));
+        assert!(!e.pulls.contains_key(&tid("pull-stale")));
+        assert!(e.pulls.contains_key(&tid("pull-fresh")));
+        assert_eq!(ui.count("transfer-failed"), 2);
+        let mut cancelled = 0;
+        while let Ok(c) = cmds.try_recv() {
+            if matches!(
+                c,
+                NetCommand::SendStream {
+                    msg: StreamMsg::Cancel { .. },
+                    ..
+                }
+            ) {
+                cancelled += 1;
+            }
+        }
+        assert_eq!(cancelled, 2);
+    }
+
+    #[tokio::test]
+    async fn sweep_forgets_only_old_early_cancels() {
+        let (mut e, _ui, _cmds) = engine();
+        let peer = PeerId::parse(PEER_A).unwrap();
+        let stale = STALL_TIMEOUT + Duration::from_secs(1);
+        e.early_cancels
+            .push_back((tid("old"), peer.clone(), ago(stale)));
+        e.early_cancels
+            .push_back((tid("new"), peer.clone(), Instant::now()));
+        e.sweep_stalled().await;
+        assert!(!e.take_early_cancel(&tid("old"), &peer));
+        assert!(e.take_early_cancel(&tid("new"), &peer));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn run_sweeps_every_quarter_of_the_stall_timeout() {
+        let (mut e, ui, _cmds) = engine();
+        e.pulls.insert(
+            tid("pull"),
+            pull(ago(STALL_TIMEOUT - Duration::from_millis(500))),
+        );
+        let (_commands, inbox) = mpsc::channel(8);
+        let (_events, net_events) = mpsc::channel(8);
+        let task = tokio::spawn(e.run(inbox, net_events));
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(ui.count("transfer-failed"), 0);
+        std::thread::sleep(Duration::from_millis(700));
+        tokio::time::advance(STALL_TIMEOUT / 4 + Duration::from_secs(1)).await;
+        for _ in 0..200 {
+            if ui.count("transfer-failed") > 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            ui.count("transfer-failed"),
+            1,
+            "멈춘 전송을 주기적으로 정리하지 않음"
+        );
+        task.abort();
+    }
+}

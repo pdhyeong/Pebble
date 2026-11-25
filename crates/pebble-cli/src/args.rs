@@ -210,4 +210,84 @@ mod tests {
         assert!(parse(args("daemon --port abc")).is_err());
         assert!(parse(args("send /no/such/file done")).is_err());
     }
+
+    fn request(line: &str) -> ControlRequest {
+        match parse(args(line)).unwrap().command {
+            Command::Request(r) => r,
+            Command::Daemon(_) => panic!("요청이어야 합니다"),
+        }
+    }
+
+    #[test]
+    fn parses_every_zero_and_one_argument_command() {
+        assert!(matches!(request("status"), ControlRequest::Status));
+        assert!(matches!(request("peers"), ControlRequest::Peers));
+        assert!(
+            matches!(request("connect /ip4/1.2.3.4/tcp/1"), ControlRequest::Connect { address } if address == "/ip4/1.2.3.4/tcp/1")
+        );
+        assert!(matches!(request("pair dev"), ControlRequest::Pair { peer } if peer == "dev"));
+        assert!(
+            matches!(request("reject dev"), ControlRequest::Respond { peer, approve: false } if peer == "dev")
+        );
+        assert!(
+            matches!(request("cancel t1"), ControlRequest::Cancel { transfer } if transfer == "t1")
+        );
+        assert!(
+            matches!(request("get dev /a/b"), ControlRequest::Get { peer, path } if peer == "dev" && path == "/a/b")
+        );
+    }
+
+    #[test]
+    fn wrong_argument_counts_are_rejected() {
+        for line in [
+            "status x",
+            "peers x",
+            "connect",
+            "connect a b",
+            "pair",
+            "pair a b",
+            "reject",
+            "reject a b",
+            "get",
+            "get a b c",
+            "cancel",
+            "cancel a b",
+            "send a",
+            "send a b c d",
+            "bogus",
+        ] {
+            assert!(parse(args(line)).is_err(), "{line}");
+        }
+    }
+
+    #[test]
+    fn send_resolves_file_and_defaults_dir() {
+        let file = std::env::temp_dir().join(format!("pbB-args-{}.txt", std::process::id()));
+        std::fs::write(&file, b"x").unwrap();
+        let canonical = std::fs::canonicalize(&file).unwrap();
+        let line = format!("send {} dev", file.display());
+        assert!(
+            matches!(request(&line), ControlRequest::Send { file, peer, dir } if file == canonical && peer == "dev" && dir == "/")
+        );
+        let line = format!("send {} dev /up", file.display());
+        assert!(matches!(request(&line), ControlRequest::Send { dir, .. } if dir == "/up"));
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn unknown_option_is_reported_as_option() {
+        let err = parse(args("status --bogus")).err().unwrap();
+        assert!(err.contains("모르는 옵션: --bogus"), "{err}");
+    }
+
+    #[test]
+    fn daemon_folders_become_absolute() {
+        let cli = parse(args("daemon --shared rel/share --downloads rel/dl")).unwrap();
+        let Command::Daemon(opts) = cli.command else {
+            panic!("daemon 이어야 합니다")
+        };
+        assert_eq!(opts.shared, Some(std::path::absolute("rel/share").unwrap()));
+        assert_eq!(opts.downloads, Some(std::path::absolute("rel/dl").unwrap()));
+        assert!(opts.tailscale);
+    }
 }

@@ -74,6 +74,14 @@ struct Node {
     online: bool,
     #[serde(rename = "TailscaleIPs", default)]
     ips: Vec<String>,
+    #[serde(rename = "Tags", default)]
+    tags: Option<Vec<String>>,
+}
+
+impl Node {
+    fn is_personal(&self) -> bool {
+        self.user_id != 0 && self.tags.as_ref().is_none_or(Vec::is_empty)
+    }
 }
 
 pub fn same_owner_peers(raw: &[u8]) -> AppResult<Vec<Ipv4Addr>> {
@@ -87,7 +95,12 @@ pub fn same_owner_peers(raw: &[u8]) -> AppResult<Vec<Ipv4Addr>> {
         .peers
         .unwrap_or_default()
         .into_values()
-        .filter(|node| node.online && node.user_id == status.me.user_id && status.me.user_id != 0)
+        .filter(|node| {
+            status.me.is_personal()
+                && node.is_personal()
+                && node.online
+                && node.user_id == status.me.user_id
+        })
         .filter_map(|node| node.ips.iter().find_map(|ip| ip.parse::<Ipv4Addr>().ok()))
         .collect();
     found.sort();
@@ -136,5 +149,25 @@ mod tests {
     #[test]
     fn broken_status_is_an_error() {
         assert!(same_owner_peers(b"not json").is_err());
+    }
+
+    #[test]
+    fn tagged_devices_are_never_treated_as_mine() {
+        let raw = r#"{
+            "Self": {"UserID": 7, "Online": true, "TailscaleIPs": ["100.64.0.1"]},
+            "Peer": {
+                "server": {"UserID": 7, "Online": true, "Tags": ["tag:server"], "TailscaleIPs": ["100.64.0.9"]},
+                "mine": {"UserID": 7, "Online": true, "Tags": [], "TailscaleIPs": ["100.64.0.3"]}
+            }
+        }"#;
+        assert_eq!(
+            same_owner_peers(raw.as_bytes()).unwrap(),
+            vec!["100.64.0.3".parse::<Ipv4Addr>().unwrap()]
+        );
+        let tagged_self = r#"{
+            "Self": {"UserID": 5, "Online": true, "Tags": ["tag:ci"], "TailscaleIPs": ["100.64.0.1"]},
+            "Peer": {"other": {"UserID": 5, "Online": true, "Tags": ["tag:ci"], "TailscaleIPs": ["100.64.0.2"]}}
+        }"#;
+        assert!(same_owner_peers(tagged_self.as_bytes()).unwrap().is_empty());
     }
 }
